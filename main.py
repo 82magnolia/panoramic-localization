@@ -22,6 +22,7 @@ if __name__ == '__main__':
     parser.add_argument("--query_img", default=None, help="Path to query image to localize for single sample case")
     parser.add_argument("--color_pcd", default=None, help="Path to colored point cloud to use as the map for single sample case")
     parser.add_argument("--line_pcd", default=None, help="Path to line cloud to use as the map for single sample case")
+    parser.add_argument("--crop_up_down", action='store_true', help="If True, crops panorama's upper and lower regions during localization")
     args = parser.parse_args()
     cfg = parse_ini(args.config)
 
@@ -76,7 +77,7 @@ if __name__ == '__main__':
     # Branch on dataset
     if args.method in ['ldl']:
         if args.single:
-            importlib.import_module(f"{args.method}.localize_single").localize(cfg, log_dir, args.query_img, args.color_pcd, args.line_pcd)
+            importlib.import_module(f"{args.method}.localize_single").localize(cfg, log_dir, args.query_img, args.color_pcd, args.line_pcd, args.crop_up_down)
         else:
             importlib.import_module(f"{args.method}.localize").localize(cfg, log_dir)
     else:

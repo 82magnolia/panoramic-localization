@@ -32,7 +32,7 @@ from tqdm import tqdm
 warnings.filterwarnings("ignore", category=UserWarning) 
 
 
-def localize(cfg: NamedTuple, log_dir: str, query_img_path: str, color_pcd_path: str, line_pcd_path: str):
+def localize(cfg: NamedTuple, log_dir: str, query_img_path: str, color_pcd_path: str, line_pcd_path: str, crop_up_down: bool):
     """
     Main function for performing localization against a single 3D map and image.
 
@@ -40,39 +40,27 @@ def localize(cfg: NamedTuple, log_dir: str, query_img_path: str, color_pcd_path:
         cfg: Config file
         log_dir: Directory in which logs will be saved
         query_img_path: Path to query image
-        color_pcd_path: Path to colored point cloud
-        line_pcd_path: Path to line cloud
+        color_pcd_path: Path to colored point cloud, saved in .txt format with colors in [0...255]
+        line_pcd_path: Path to line cloud, saved in .txt format
+        crop_up_down: If True, crops upper and lower parts of panorama during localization
     
     Returns:
         None
     """
 
-    """
-    TODO: We need to implement the followings
-
-    1. Read single image / point cloud
-    2. Perform localization for a single iteration
-    3. Visualize localized results using make_pano
-    """
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
-    out_of_room_quantile = getattr(cfg, 'out_of_room_quantile', 0.05)
 
     # Algorithm configs
     sample_rate = getattr(cfg, 'sample_rate', 1)
     max_edge_count = getattr(cfg, 'max_edge_count', 1000)  # Max edge count to prevent GPU overload
     top_k_candidate = getattr(cfg, 'top_k_candidate', 5)
     refine_mode = getattr(cfg, 'refine_mode', 'match')
-    print_retrieval = getattr(cfg, 'print_retrieval', False)
     coord_h = getattr(cfg, 'coord_h', 320)
     coord_w = getattr(cfg, 'coord_w', 640)
     render_h = getattr(cfg, 'render_h', 320)
     render_w = getattr(cfg, 'render_w', 640)
 
-    well_posed = 0
-    valid_trial = 0
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-
-    past_pcd_name = ""
 
     # Set configs for principal 2d, 3d direction detection
     num_principal = 3
@@ -97,95 +85,76 @@ def localize(cfg: NamedTuple, log_dir: str, query_img_path: str, color_pcd_path:
     vote_sphere_pts = generate_sphere_pts(5, device=device)
     vote_sphere_pts = vote_sphere_pts[:vote_sphere_pts.shape[0] // 2]
 
-    # Main localization
-    if trial == 0:  # Assume a single 3D map to be localized against
-        print("STEP 1: Point Cloud Loading & Feature Extraction & 3D Principal Direction Extraction")
-        start = time.time()
+    # Main localization (assume a single 3D map to be localized against)
+    print("STEP 1: Point Cloud Loading & Feature Extraction & 3D Principal Direction Extraction")
+    start = time.time()
 
-        xyz_np, pcd_rgb_np = data_utils.read_pcd(dataset, pcd_name=pcd_name, sample_rate=sample_rate)
-        mean_size = (xyz_np.max(0) - xyz_np.min(0)).mean()
-        length_thres = mean_size * 0.10  # Adaptive length thres
-        dirs_np, starts_np, ends_np, num_unq = data_utils.read_line(pcd_name, length_thres, max_edge_count)
-        topk_ratio = starts_np.shape[0] / num_unq  # Top-k ratio to select from 2D lines
-        dirs = torch.from_numpy(dirs_np).float().to(device)
-        starts = torch.from_numpy(starts_np).float().to(device)
-        ends = torch.from_numpy(ends_np).float().to(device)
-        xyz = torch.from_numpy(xyz_np).float().to(device)
-        rgb = torch.from_numpy(pcd_rgb_np).float().to(device)
+    xyz_np, pcd_rgb_np = data_utils.read_txt_pcd(color_pcd_path, sample_rate=sample_rate)
+    mean_size = (xyz_np.max(0) - xyz_np.min(0)).mean()
+    length_thres = mean_size * 0.10  # Adaptive length thres
+    dirs_np, starts_np, ends_np, num_unq = data_utils.read_line(line_pcd_path, length_thres, max_edge_count)
+    topk_ratio = starts_np.shape[0] / num_unq  # Top-k ratio to select from 2D lines
+    dirs = torch.from_numpy(dirs_np).float().to(device)
+    starts = torch.from_numpy(starts_np).float().to(device)
+    ends = torch.from_numpy(ends_np).float().to(device)
+    xyz = torch.from_numpy(xyz_np).float().to(device)
+    rgb = torch.from_numpy(pcd_rgb_np).float().to(device)
 
-        # Set 3D principal directions
-        principal_3d = []
-        counts_3d = []
-        vote_dirs = dirs.clone().detach()
-        for _ in range(num_principal):
-            vote_3d = torch.abs(vote_dirs[:, :3] @ vote_sphere_pts.t()).argmax(-1).bincount(minlength=vote_sphere_pts.shape[0])
-            max_idx = vote_3d.argmax()
-            counts_3d.append(vote_3d.max().item())
-            principal_3d.append(vote_sphere_pts[max_idx])
-            outlier_idx = (torch.abs(vote_dirs[:, :3] @ vote_sphere_pts[max_idx: max_idx+1].t()) < 0.95).squeeze()
-            vote_dirs = vote_dirs[outlier_idx]
-        principal_3d = torch.stack(principal_3d, dim=0)
+    # Set 3D principal directions
+    principal_3d = []
+    counts_3d = []
+    vote_dirs = dirs.clone().detach()
+    for _ in range(num_principal):
+        vote_3d = torch.abs(vote_dirs[:, :3] @ vote_sphere_pts.t()).argmax(-1).bincount(minlength=vote_sphere_pts.shape[0])
+        max_idx = vote_3d.argmax()
+        counts_3d.append(vote_3d.max().item())
+        principal_3d.append(vote_sphere_pts[max_idx])
+        outlier_idx = (torch.abs(vote_dirs[:, :3] @ vote_sphere_pts[max_idx: max_idx+1].t()) < 0.95).squeeze()
+        vote_dirs = vote_dirs[outlier_idx]
+    principal_3d = torch.stack(principal_3d, dim=0)
 
-        if torch.det(principal_3d) < 0:
-            principal_3d[-1, :] *= -1
+    if torch.det(principal_3d) < 0:
+        principal_3d[-1, :] *= -1
 
-        # Set translation start points
-        init_dict = get_init_dict(cfg)
-        trans_tensors = generate_trans_points(xyz, init_dict, device=device)
+    # Set translation start points
+    init_dict = get_init_dict(cfg)
+    trans_tensors = generate_trans_points(xyz, init_dict, device=device)
 
-        kpts_xyz_list = []
-        desc_list = []
-        score_list = []
+    kpts_xyz_list = []
+    desc_list = []
+    score_list = []
 
-        # Feature extraction
-        num_pts = 0
-        for trans in tqdm(trans_tensors):
-            transform_xyz = xyz - trans.unsqueeze(0)
-            render_img = make_pano(transform_xyz, rgb, resolution=(render_h, render_w), return_torch=True).float() / 255.
-            coord_img = make_pano(transform_xyz, xyz, return_torch=True, resolution=(coord_h, coord_w)).float() / 255.
+    # Feature extraction
+    num_pts = 0
+    for trans in tqdm(trans_tensors):
+        transform_xyz = xyz - trans.unsqueeze(0)
+        render_img = make_pano(transform_xyz, rgb, resolution=(render_h, render_w), return_torch=True).float() / 255.
+        coord_img = make_pano(transform_xyz, xyz, return_torch=True, resolution=(coord_h, coord_w)).float() / 255.
 
-            with torch.no_grad():
-                render_img = rgb_to_grayscale(render_img.permute(2, 0, 1).unsqueeze(0))
-                pred = matcher.superpoint({'image': render_img})
-                kpts_ij = pred['keypoints'][0]  # (N_kpts, 2)
-                kpts_ij[:, 0] = (kpts_ij[:, 0] - coord_w // 2) / (coord_w // 2)
-                kpts_ij[:, 1] = (kpts_ij[:, 1] - coord_h // 2) / (coord_h // 2)
-                kpts_xyz = sample_from_img(coord_img, kpts_ij, mode='nearest')
-                valid_mask = kpts_xyz.norm(dim=-1) > 0.1
-                kpts_xyz = kpts_xyz[valid_mask]                    
-                scores = pred['scores'][0][valid_mask]
-                desc = pred['descriptors'][0][:, valid_mask]
-            num_pts += kpts_xyz.shape[0]
-            kpts_xyz_list.append(kpts_xyz)
-            desc_list.append(desc)
-            score_list.append(scores)
-        elapsed = time.time() - start
-        print(f"Finished in {elapsed:.3f}s \n")
-    
-    # Update past_pcd_name
-    past_pcd_name = pcd_name
-
-    # Load and check validity of gt pose
-    if dataset == 'omniscenes':
-        gt_trans, gt_rot = data_utils.read_gt(dataset, filename=filename)
-    elif dataset == 'stanford':
-        gt_trans, gt_rot = data_utils.read_gt(dataset, area_num=area_num, img_name=img_name)
-    gt_trans = torch.from_numpy(gt_trans).float().to(device)
-    gt_rot = torch.from_numpy(gt_rot).float().to(device)
-
-    if out_of_room(xyz, gt_trans, out_of_room_quantile):
-        print(f'{filename} gt_trans is out of the room\n')
-        logger.add_skipped_room(filename)
-        continue
-    else:
-        valid_trial += 1
+        with torch.no_grad():
+            render_img = rgb_to_grayscale(render_img.permute(2, 0, 1).unsqueeze(0))
+            pred = matcher.superpoint({'image': render_img})
+            kpts_ij = pred['keypoints'][0]  # (N_kpts, 2)
+            kpts_ij[:, 0] = (kpts_ij[:, 0] - coord_w // 2) / (coord_w // 2)
+            kpts_ij[:, 1] = (kpts_ij[:, 1] - coord_h // 2) / (coord_h // 2)
+            kpts_xyz = sample_from_img(coord_img, kpts_ij, mode='nearest')
+            valid_mask = kpts_xyz.norm(dim=-1) > 0.1
+            kpts_xyz = kpts_xyz[valid_mask]                    
+            scores = pred['scores'][0][valid_mask]
+            desc = pred['descriptors'][0][:, valid_mask]
+        num_pts += kpts_xyz.shape[0]
+        kpts_xyz_list.append(kpts_xyz)
+        desc_list.append(desc)
+        score_list.append(scores)
+    elapsed = time.time() - start
+    print(f"Finished in {elapsed:.3f}s \n")
 
     # Read image
-    orig_img = cv2.cvtColor(cv2.imread(filename), cv2.COLOR_BGR2RGB)
+    orig_img = cv2.cvtColor(cv2.imread(query_img_path), cv2.COLOR_BGR2RGB)
 
     edge_tgt_img = cv2.resize(orig_img, (1024, 512))
 
-    if dataset == 'stanford':
+    if crop_up_down:
         # Eliminate the top, bottom dark regions
         edge_tgt_img[:512 // 6] = 0
         edge_tgt_img[-512 // 6:] = 0
@@ -289,15 +258,6 @@ def localize(cfg: NamedTuple, log_dir: str, query_img_path: str, color_pcd_path:
     trimmed_trans = trans_tensors[min_inds // len(estim_rot)]
     trimmed_rot = estim_rot[min_inds % len(estim_rot)]
 
-    # Evaluate estimated rotations with ground truth
-    r_error = torch.matmul(torch.transpose(estim_rot, dim0=-2, dim1=-1), gt_rot.unsqueeze(0))
-    r_error = torch.diagonal(r_error, dim1=-2, dim2=-1).sum(-1)
-    r_error[r_error < -1] = -2 - r_error[r_error < -1]
-    r_error[r_error > 3] = 6 - r_error[r_error > 3]
-    r_error = torch.rad2deg(torch.abs(torch.arccos((r_error - 1) / 2)))
-
-    rot_k_error = r_error[min_inds % len(estim_rot)]
-
     # Refine top-k poses
     print(f"STEP 5: Refining pose estimates with using {refine_mode} mode")
     start = time.time()
@@ -310,3 +270,11 @@ def localize(cfg: NamedTuple, log_dir: str, query_img_path: str, color_pcd_path:
     print(f"Finished in {elapsed:.3f}s \n")
 
     # Visualize localization
+    vis_img = cv2.resize(edge_tgt_img, (400, 200))
+    result_img = make_pano((xyz - refined_trans) @ refined_rot.T, rgb)
+    margin_img = np.zeros_like(vis_img[:, :100, :])
+    final_img = np.concatenate([vis_img, margin_img, result_img], axis=1)
+    final_img = cv2.cvtColor(final_img, cv2.COLOR_BGR2RGB)
+    cv2.imwrite(os.path.join(log_dir, 'result.png'), final_img)
+
+    print(f"Saved localization visualization in {os.path.join(log_dir, 'result.png')}")

@@ -65,36 +65,6 @@ def read_line(filepath: str, length_thres: float = 0.0, max_edge_count: int = No
 
 # Stanford
 
-def read_stanford(filepath: str, sample_rate: float = 1) -> Tuple[np.array, np.array]:
-    """
-    Read Stanford2D-3D-S point cloud data from filepath
-
-    Args:
-        filepath: full path name
-        sample_rate: point cloud sampling rate (at least 1), returns point cloud of size (N // sample_rate, 3)
-
-    Returns:
-        xyz: (N, 3) numpy array containing xyz coordinates of the point cloud data
-        rgb: (N, 3) numpy array containing rgb values of the point cloud data, in range of [0, 1]
-    """
-
-    # read file
-    data = read_table(filepath, header=None, delim_whitespace=True).values
-
-    xyz = data[:, :3]
-    rgb = data[:, 3:] / 255.
-
-    # sampling point cloud
-    if sample_rate > 1.0:
-        perm = np.random.permutation(xyz.shape[0])
-        num_samples = int(xyz.shape[0] / sample_rate)
-        idx = perm[:num_samples]
-        xyz = xyz[idx]
-        rgb = rgb[idx]
-
-    return xyz, rgb
-
-
 def obtain_gt_stanford(area_num: Union[int, str], img_name: str, random_rot: bool = False) -> Tuple[np.array, np.array]:
     """
     Obtain Stanford2D-3D-S dataset ground truth translation & rotation
@@ -188,9 +158,9 @@ def obtain_gt_stanford(area_num: Union[int, str], img_name: str, random_rot: boo
     return gt_trans, gt_rot
 
 
-def read_omniscenes(filepath: str, sample_rate: float = 1) -> Tuple[np.array, np.array]:
+def read_txt_pcd(filepath: str, sample_rate: float = 1) -> Tuple[np.array, np.array]:
     """
-    Read omniscenes dataset point cloud data from filepath
+    Read point cloud data from filepath saved in .txt format
 
     Args:
         filepath: full path name
@@ -264,10 +234,9 @@ def get_pcd_name(dataset, **kwargs):
 
 def read_pcd(dataset, **kwargs):
     if dataset == 'omniscenes':
-        return read_omniscenes(kwargs['pcd_name'].replace('pcd_line', 'pcd').replace('lines', ''), sample_rate=kwargs['sample_rate'])
+        return read_txt_pcd(kwargs['pcd_name'].replace('pcd_line', 'pcd').replace('lines', ''), sample_rate=kwargs['sample_rate'])
     elif dataset == 'stanford':
-        return read_stanford(kwargs['pcd_name'].replace('pcd_line', 'pcd').replace('lines', ''), sample_rate=kwargs['sample_rate'])
-
+        return read_txt_pcd(kwargs['pcd_name'].replace('pcd_line', 'pcd').replace('lines', ''), sample_rate=kwargs['sample_rate'])
 
 def read_gt(dataset, **kwargs):
     if dataset == 'omniscenes':
