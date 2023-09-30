@@ -63,7 +63,7 @@ Then, place the data in the directory structure below.
         |   ├── pyebaekRoom_1lines.txt
         |   │
         |   ⋮
-        ⋮  │
+        |   │
         |   └── weddingHall_1lines.txt
         └── pcd (point cloud data)
             ├── pyebaekRoom_1.txt
