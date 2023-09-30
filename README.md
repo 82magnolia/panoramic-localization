@@ -1,5 +1,12 @@
 # Panoramic Localization
-Panoramic localization library containing PyTorch implementations of various panoramic localization algorithms: PICCOLO (ICCV 2021), CPO (ECCV 2022), and [LDL](https://github.com/82magnolia/panoramic-localization#running-ldl) (ICCV 2023).
+Panoramic localization library containing PyTorch implementations of various panoramic localization algorithms: [PICCOLO](https://openaccess.thecvf.com/content/ICCV2021/html/Kim_PICCOLO_Point_Cloud-Centric_Omnidirectional_Localization_ICCV_2021_paper.html) (ICCV 2021), [CPO](https://www.ecva.net/papers/eccv_2022/papers_ECCV/html/1567_ECCV_2022_paper.php) (ECCV 2022), and [LDL](https://openaccess.thecvf.com/content/ICCV2023/html/Kim_LDL_Line_Distance_Functions_for_Panoramic_Localization_ICCV_2023_paper.html) (ICCV 2023).
+Please refer to the links below to run each of the localization algorithms.
+
+* PICCOLO: TBD 
+* CPO: TBD
+* LDL: [Link](https://github.com/82magnolia/panoramic-localization#running-ldl)
+
+
 
 ## Dataset preparation (Stanford 2D-3D-S & OmniScenes)
 First ownload the panorama images (`pano`) and poses (`pose`) from the following [link](https://docs.google.com/forms/d/e/1FAIpQLScFR0U8WEUtb7tgjOhhnl31OrkEs73-Y8bQwPeXgebqVKNMpQ/viewform?c=0&w=1) (download the one without `XYZ`) and the point cloud (`pcd_not_aligned`) from the following [link](https://docs.google.com/forms/d/e/1FAIpQLScDimvNMCGhy_rmBA2gHfDu3naktRm6A8BPwAWWDv-Uhm6Shw/viewform?c=0&w=1).
@@ -101,4 +108,39 @@ Then, extract 3D line segments using the [following repository](https://github.c
 Finally, run the following command, and the renderings at the localized pose will be saved in the log directory.
 ```
 python main.py --config config/omniscenes_ldl.ini --log LOG_DIRECTORY --method ldl --single --query_img PATH_TO_QUERY_IMG --color_pcd PATH_TO_COLORED_POINT_CLOUD --line_pcd PATH_TO_LINE_CLOUD
+```
+
+## Citation
+If you find the repository useful, please cite the following papers:
+```bibtex
+@InProceedings{Kim_2021_ICCV,
+    author    = {Kim, Junho and Choi, Changwoon and Jang, Hojun and Kim, Young Min},
+    title     = {PICCOLO: Point Cloud-Centric Omnidirectional Localization},
+    booktitle = {Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV)},
+    month     = {October},
+    year      = {2021},
+    pages     = {3313-3323}
+}
+```
+
+```bibtex
+@InProceedings{Kim_2022_ECCV,
+    author    = {Kim, Junho and Jang, Hojun and Choi, Changwoon and Kim, Young Min},
+    title     = {CPO: Change Robust Panorama to Point Cloud Localization},
+    booktitle = {Proceedings of the European Conference on Computer Vision (ECCV)},
+    month     = {October},
+    year      = {2022},
+    pages     = {176-192},
+}
+```
+
+```bibtex
+@InProceedings{Kim_2023_ICCV,
+    author    = {Kim, Junho and Choi, Changwoon and Jang, Hojun and Kim, Young Min},
+    title     = {LDL: Line Distance Functions for Panoramic Localization},
+    booktitle = {Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV)},
+    month     = {October},
+    year      = {2023},
+    pages     = {17882-17892}
+}
 ```
