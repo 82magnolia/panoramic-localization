@@ -72,7 +72,7 @@ Then, place the data in the directory structure below.
             │
             └── weddingHall_1.txt
 
-### Installation
+## Installation
 To run the codebase, you need [Anaconda](https://www.anaconda.com/). Once you have Anaconda installed, run the following command to create a conda environment.
 
     conda create --name omniloc python=3.7
@@ -83,6 +83,11 @@ To run the codebase, you need [Anaconda](https://www.anaconda.com/). Once you ha
 In addition, you must install pytorch_scatter. Follow the instructions provided in [the pytorch_scatter github repo](https://github.com/rusty1s/pytorch_scatter). You need to install the version for torch 1.7.0 and CUDA 10.1.
 
 ## Running LDL
+### Stanford 2D-3D-S
+TODO
+### OmniScenes
+TODO
+### Preparing and Testing on Your Own Data
 TODO
 
 
