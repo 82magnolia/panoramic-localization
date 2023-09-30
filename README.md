@@ -6,7 +6,15 @@ Please refer to the links below to run each of the localization algorithms.
 * CPO: TBD
 * LDL: [Link](https://github.com/82magnolia/panoramic-localization#running-ldl)
 
+## Description of Each Localization Algorithm
+### PICCOLO (ICCV 2021)
+TODO
 
+### CPO (ECCV 2022)
+TODO
+
+### LDL (ICCV 2023)
+TODO
 
 ## Dataset preparation (Stanford 2D-3D-S & OmniScenes)
 First ownload the panorama images (`pano`) and poses (`pose`) from the following [link](https://docs.google.com/forms/d/e/1FAIpQLScFR0U8WEUtb7tgjOhhnl31OrkEs73-Y8bQwPeXgebqVKNMpQ/viewform?c=0&w=1) (download the one without `XYZ`) and the point cloud (`pcd_not_aligned`) from the following [link](https://docs.google.com/forms/d/e/1FAIpQLScDimvNMCGhy_rmBA2gHfDu3naktRm6A8BPwAWWDv-Uhm6Shw/viewform?c=0&w=1).
