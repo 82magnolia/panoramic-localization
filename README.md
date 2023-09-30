@@ -8,13 +8,22 @@ Please refer to the links below to run each of the localization algorithms.
 
 ## Description of Each Localization Algorithm
 ### PICCOLO (ICCV 2021)
-TODO
+[<img src="piccolo_overview.jpg" width="500"/>](piccolo_overview.jpg)\
+PICCOLO is a panoramic localization algorithm that estimates camera pose given a set of input query image and colored point cloud.
+The algorithm optimizes the discrepancy between the query image colors and the projected point cloud's color values.
+For more details, please refer to the [original paper](https://openaccess.thecvf.com/content/ICCV2021/html/Kim_PICCOLO_Point_Cloud-Centric_Omnidirectional_Localization_ICCV_2021_paper.html) and [video](https://www.youtube.com/watch?v=E-_lEsChfoE).
 
 ### CPO (ECCV 2022)
-TODO
+[<img src="cpo_overview.png" width="700"/>](cpo_overview.png)\
+CPO is a follow-up work of PICCOLO that also estimated camera pose given a query image and point cloud.
+Instead of directly optimizing the color values as in PICCOLO, CPO aims to match the color distributions, which lead to large amounts of runtime improvement.
+For more details, please refer to the [original paper](https://www.ecva.net/papers/eccv_2022/papers_ECCV/papers/136690173.pdf) and [video](https://www.youtube.com/watch?v=V6XjHL5q0_Y).
 
 ### LDL (ICCV 2023)
-TODO
+[<img src="ldl_overview.png" width="700"/>](ldl_overview.png)\
+LDL is a line-based panoramic localization algorithm that localized a query image with respect to a 3D line map.
+To this end, LDL compares the distribution of lines using line distance functions, which makes pose search even faster than CPO.
+For more details, please refer to the [original paper](https://openaccess.thecvf.com/content/ICCV2023/papers/Kim_LDL_Line_Distance_Functions_for_Panoramic_Localization_ICCV_2023_paper.pdf) and [video](https://www.youtube.com/watch?v=cQ5l4rauNY0).
 
 ## Dataset preparation (Stanford 2D-3D-S & OmniScenes)
 First ownload the panorama images (`pano`) and poses (`pose`) from the following [link](https://docs.google.com/forms/d/e/1FAIpQLScFR0U8WEUtb7tgjOhhnl31OrkEs73-Y8bQwPeXgebqVKNMpQ/viewform?c=0&w=1) (download the one without `XYZ`) and the point cloud (`pcd_not_aligned`) from the following [link](https://docs.google.com/forms/d/e/1FAIpQLScDimvNMCGhy_rmBA2gHfDu3naktRm6A8BPwAWWDv-Uhm6Shw/viewform?c=0&w=1).
