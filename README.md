@@ -1,5 +1,5 @@
 # Panoramic Localization
-Panoramic localization library containing PyTorch implementations of various panoramic localization algorithms: PICCOLO (ICCV 2021), CPO (ECCV 2022), and LDL (ICCV 2023).
+Panoramic localization library containing PyTorch implementations of various panoramic localization algorithms: PICCOLO (ICCV 2021), CPO (ECCV 2022), and [LDL](https://github.com/82magnolia/panoramic-localization#running-ldl) (ICCV 2023).
 
 ## Dataset preparation (Stanford 2D-3D-S & OmniScenes)
 First ownload the panorama images (`pano`) and poses (`pose`) from the following [link](https://docs.google.com/forms/d/e/1FAIpQLScFR0U8WEUtb7tgjOhhnl31OrkEs73-Y8bQwPeXgebqVKNMpQ/viewform?c=0&w=1) (download the one without `XYZ`) and the point cloud (`pcd_not_aligned`) from the following [link](https://docs.google.com/forms/d/e/1FAIpQLScDimvNMCGhy_rmBA2gHfDu3naktRm6A8BPwAWWDv-Uhm6Shw/viewform?c=0&w=1).
@@ -83,11 +83,22 @@ To run the codebase, you need [Anaconda](https://www.anaconda.com/). Once you ha
 In addition, you must install pytorch_scatter. Follow the instructions provided in [the pytorch_scatter github repo](https://github.com/rusty1s/pytorch_scatter). You need to install the version for torch 1.7.0 and CUDA 10.1.
 
 ## Running LDL
-### Stanford 2D-3D-S
-TODO
-### OmniScenes
-TODO
+### Stanford 2D-3D-S or OmniScenes
+Run the following command for Stanford 2D-3D-S.
+```
+python main.py --config config/stanford_ldl.ini --log log/ldl_test --method ldl
+```
+
+Similarly, run the following command for OmniScenes
+```
+python main.py --config config/omniscenes_ldl.ini --log log/ldl_test --method ldl
+```
+
 ### Preparing and Testing on Your Own Data
-TODO
-
-
+We also provide scripts for directly testing on your own data. 
+First, prepare a query panorama image and 3D colored point cloud.
+Then, extract 3D line segments using the [following repository](https://github.com/xiaohulugo/3DLineDetection).
+Finally, run the following command, and the renderings at the localized pose will be saved in the log directory.
+```
+python main.py --config config/omniscenes_ldl.ini --log LOG_DIRECTORY --method ldl --single --query_img PATH_TO_QUERY_IMG --color_pcd PATH_TO_COLORED_POINT_CLOUD --line_pcd PATH_TO_LINE_CLOUD
+```
