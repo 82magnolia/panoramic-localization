@@ -127,6 +127,26 @@ Finally, run the following command, and the renderings at the localized pose wil
 python main.py --config config/omniscenes_ldl.ini --log LOG_DIRECTORY --method ldl --single --query_img PATH_TO_QUERY_IMG --color_pcd PATH_TO_COLORED_POINT_CLOUD --line_pcd PATH_TO_LINE_CLOUD
 ```
 
+## Running CPO
+### Stanford 2D-3D-S or OmniScenes
+Run the following command for Stanford 2D-3D-S.
+```
+python main.py --config config/stanford_cpo.ini --log log/cpo_test --method cpo
+```
+
+Similarly, run the following command for OmniScenes
+```
+python main.py --config config/omniscenes_cpo.ini --log log/cpo_test --method cpo
+```
+
+### Preparing and Testing on Your Own Data
+We also provide scripts for directly testing on your own data. 
+First, prepare a query panorama image and 3D colored point cloud.
+Then, run the following command, and the renderings at the localized pose will be saved in the log directory.
+```
+python main.py --config config/omniscenes_cpo.ini --log LOG_DIRECTORY --method cpo --single --query_img PATH_TO_QUERY_IMG --color_pcd PATH_TO_COLORED_POINT_CLOUD --line_pcd PATH_TO_LINE_CLOUD
+```
+
 ## Checking log files
 Results from localization will be saved in `.pkl` files. To open a single `.pkl` file and print the recall at `0.1m, 5deg`, run the following command.
 ```
