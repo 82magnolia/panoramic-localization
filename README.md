@@ -127,7 +127,7 @@ Finally, run the following command, and the renderings at the localized pose wil
 python main.py --config config/omniscenes_ldl.ini --log LOG_DIRECTORY --method ldl --single --query_img PATH_TO_QUERY_IMG --color_pcd PATH_TO_COLORED_POINT_CLOUD --line_pcd PATH_TO_LINE_CLOUD
 ```
 
-### Checking log files
+## Checking log files
 Results from localization will be saved in `.pkl` files. To open a single `.pkl` file and print the recall at `0.1m, 5deg`, run the following command.
 ```
 python process_logger.py log/result.pkl 0.1 5
