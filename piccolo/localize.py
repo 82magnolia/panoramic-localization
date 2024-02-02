@@ -1,23 +1,20 @@
 import torch
+import numpy as np
+import random
 import cv2
 import os
 import time
+import csv
+from torch.utils.tensorboard import SummaryWriter
+from glob import glob
 from typing import NamedTuple
-import numpy as np
-from log_utils import PoseLogger, save_logger
+from collections import defaultdict
+from color_utils import color_mod, color_match
+from utils import generate_trans_points, generate_rot_points, sampling_histogram_pose_search, out_of_room
 import data_utils
-from dict_utils import get_init_dict_cpo
-from color_utils import color_match, color_mod
-from utils import (
-    out_of_room,
-    generate_trans_points,
-    generate_rot_points,
-    make_score_map_2d,
-    process_score_map_2d,
-    make_score_map_3d,
-    histogram_pose_search
-)
-from cpo.sampling_loss import refine_pose_sampling_loss
+from log_utils import PoseLogger, save_logger
+from piccolo.sampling_loss import refine_pose_sampling_loss, refine_pose_sampling_loss_batch
+from dict_utils import get_init_dict_piccolo
 
 
 def localize(cfg: NamedTuple, log_dir: str):
@@ -54,6 +51,7 @@ def localize(cfg: NamedTuple, log_dir: str):
     # Algorithm configs
     sample_rate = getattr(cfg, 'sample_rate', 1)
     top_k_candidate = getattr(cfg, 'top_k_candidate', 5)
+    num_intermediate = getattr(cfg, 'num_intermediate', 20)
 
     logger = PoseLogger(log_dir)
 
@@ -112,10 +110,9 @@ def localize(cfg: NamedTuple, log_dir: str):
             xyz = xyz.to(device)
             rgb = rgb.to(device)
 
-        # Read image
         orig_img = cv2.cvtColor(cv2.imread(filename), cv2.COLOR_BGR2RGB)
-        orig_img = cv2.resize(orig_img, (2048, 1024))  # CPO assumes images of this size
-        
+        orig_img = cv2.resize(orig_img, (2048, 1024))
+
         # Optionally sharpen or match color histograms between point cloud and query image
         sharpen_color = getattr(cfg, 'sharpen_color', False)
         match_color = getattr(cfg, 'match_color', False)
@@ -135,6 +132,7 @@ def localize(cfg: NamedTuple, log_dir: str):
                 new_img, rgb = color_mod(mod_img, rgb, num_bins)
                 orig_img = (255 * new_img.cpu().numpy()).astype(np.uint8)
 
+        # Set image for pose search
         img = cv2.resize(orig_img, (orig_img.shape[1] // init_downsample_w, orig_img.shape[0] // init_downsample_h))
         img = torch.from_numpy(img).float() / 255.
         img = img.to(device)
@@ -154,68 +152,35 @@ def localize(cfg: NamedTuple, log_dir: str):
         else:
             valid_trial += 1
 
-        # Set input point cloud
-        input_xyz = xyz
+        init_dict = get_init_dict_piccolo(cfg)
 
-        init_dict = get_init_dict_cpo(cfg)
-
-        # Attributes used for inlier filtering
-        inlier_init_dict = dict(init_dict)
-        inlier_init_dict['is_inlier_dict'] = True
-        inlier_init_dict['num_trans'] = getattr(cfg, 'inlier_num_trans', init_dict['num_trans'])
-        inlier_init_dict['num_yaw'] = getattr(cfg, 'inlier_num_yaw', 4)
-        inlier_init_dict['num_pitch'] = getattr(cfg, 'inlier_num_pitch', 4)
-        inlier_init_dict['num_roll'] = getattr(cfg, 'inlier_num_roll', 4)
-        inlier_init_dict['trans_init_mode'] = getattr(cfg, 'inlier_trans_init_mode', 'quantile')
-
-        inlier_test_trans = generate_trans_points(input_xyz, inlier_init_dict, device=input_xyz.device)
-        inlier_test_rot = generate_rot_points(inlier_init_dict, device=input_xyz.device)
-        inlier_num_split_h = getattr(cfg, 'inlier_num_split_h', 8)
-        inlier_num_split_w = getattr(cfg, 'inlier_num_split_w', 16)
-        margin = inlier_num_split_h // 8
-
-        # 2D score map generation
-        score_map_2d = make_score_map_2d(img, input_xyz, rgb, inlier_test_trans, inlier_test_rot, inlier_num_split_h, inlier_num_split_w, margin)
-        score_map_2d_search = process_score_map_2d(torch.zeros(cfg.num_split_h, cfg.num_split_w, device=xyz.device), score_map_2d, 'preserve', 0.0)  # Score map for pose search
-        score_map_2d_refine = process_score_map_2d(torch.from_numpy(orig_img).to(xyz.device), score_map_2d, 'preserve', 0.0).unsqueeze(-1)  # Score map for refinement
-        
-        # 3D score map generation
-        pcd_weight = None
-        init_input_xyz = input_xyz
+        # Point cloud inlier filtering for initialization
+        init_input_xyz = xyz
         init_input_rgb = rgb
-        if getattr(cfg, 'recycle_score_pcd', True):
-            if past_pcd_name != pcd_name:  # Only conditionally make inlier map
-                num_query = getattr(cfg, 'num_query', 1)
-                score_map_3d = make_score_map_3d(img, xyz, rgb, inlier_test_trans, inlier_test_rot, inlier_num_split_h, inlier_num_split_w, 
-                    margin, filename=filename, num_query=num_query, match_rgb=match_color)
-        else:
-            score_map_3d = make_score_map_3d(img, xyz, rgb, inlier_test_trans, inlier_test_rot, inlier_num_split_h, inlier_num_split_w, 
-                margin, match_rgb=match_color)
-        
-        pcd_weight = score_map_3d
+
+        # Change pcd_name, scene_no to new name
+        past_pcd_name = pcd_name
 
         # Pose search
         rot = generate_rot_points(init_dict, device=img.device)
         trans = generate_trans_points(xyz, init_dict, device=img.device)
 
-        input_trans, input_rot = histogram_pose_search(img, init_input_xyz, init_input_rgb, trans, rot, top_k_candidate,
-            init_dict['num_split_h'], init_dict['num_split_w'], score_map_2d_search, init_dict['sin_hist'])
+        input_trans, input_rot = sampling_histogram_pose_search(img, init_input_xyz, init_input_rgb,
+            trans, rot, top_k_candidate, init_dict['num_split_h'], init_dict['num_split_w'], num_intermediate)
 
-        # Update past_pcd_name
-        past_pcd_name = pcd_name
-
-        # Pose refinement
-        main_input_xyz = init_input_xyz
-        main_input_rgb = init_input_rgb
-
+        # Set image for refinement
         img = cv2.resize(orig_img, (orig_img.shape[1] // main_downsample_w, orig_img.shape[0] // main_downsample_h))
         img = torch.from_numpy(img).float() / 255.
         img = img.to(device)
 
+        # Pose refinement
         result = []
-        for i in range(top_k_candidate):
-            result.append(refine_pose_sampling_loss(img, main_input_xyz, main_input_rgb, input_trans, input_rot,
-                i, cfg, img_weight=score_map_2d_refine, pcd_weight=pcd_weight))
+
+        if getattr(cfg, 'refine_parallel', False):
+            result.append(refine_pose_sampling_loss_batch(img, xyz, rgb, input_trans, input_rot, cfg))
+        else:
+            for i in range(top_k_candidate):
+                result.append(refine_pose_sampling_loss(img, xyz, rgb, input_trans, input_rot, i, cfg))
 
         # Measure metrics
         with torch.no_grad():

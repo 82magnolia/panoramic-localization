@@ -455,10 +455,7 @@ def generate_trans_points(xyz, init_dict=None, device='cpu'):
         if init_dict['trans_init_mode'] == 'octree':
             trans_arr = generate_octree_2d(xyz, init_dict['z_prior'], device)
         else:
-            if init_dict['benchmark_grid'] and not init_dict['is_inlier_dict']:
-                tot_trans_count = len(generate_octree_2d(xyz, init_dict['z_prior'], device))
-            else:
-                tot_trans_count = init_dict['num_trans']
+            tot_trans_count = init_dict['num_trans']
             num_trans_x, num_trans_y = adaptive_trans_num(xyz, tot_trans_count, xy_only=True)
             trans_arr = torch.zeros(num_trans_x * num_trans_y, 3, device=device)
 
@@ -1545,3 +1542,164 @@ def refine_sampling_coords(img_idx: torch.tensor, rho: torch.tensor, rgb: torch.
         else:
             argmin = argmin[argmin < len(img_idx)]
             return argmin
+
+
+def sampling_loss_pose_search(img: torch.Tensor, xyz: torch.Tensor, rgb: torch.Tensor, trans: torch.Tensor, rot: torch.Tensor, num_input: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Trim translation starting point & rotation by comparing sampling loss values
+
+    Args:
+        img: (H, W, 3) torch tensor containing RGB values of the image
+        xyz: (N, 3) torch tensor containing xyz coordinates of the point cloud
+        rgb: (N, 3) torch tensor containing RGB values of the point cloud
+        trans: (K, 3) torch tensor containing translation starting point candidates
+        rot: (K, 3) torch tensor containing starting rotation candidates (yaw component)
+        num_input: number to trim starting translation & rotation
+
+    Returns:
+        trimmed_trans: (num_input, 3) torch tensor containing trimmed translation starting point
+        trimmed_rot: (num_input) torch tensor containing trimmed rotation (yaw component)
+    """
+
+    img = img.clone().detach()
+    H, W, _ = img.shape
+    loss_table = torch.zeros((len(trans), len(rot)), device=img.device)
+
+    with tqdm(desc="Loss Initialization", total=len(trans) * len(rot)) as pbar:
+        for i in range(len(trans)):
+            for j in range(len(rot)):
+                # rotation matrix
+                R = rot_from_ypr(rot[j])
+
+                new_xyz = xyz.t() - trans[i].reshape(3, -1)
+                new_xyz = (torch.matmul(R, new_xyz)).t()
+
+                coord_arr = cloud2idx(new_xyz)
+                sample_rgb = sample_from_img(img, coord_arr)
+                mask = torch.sum(sample_rgb == 0, dim=1) != 3
+                rgb_loss = torch.norm(sample_rgb[mask] - rgb[mask], dim=-1).mean()
+
+                loss_table[i, j] = rgb_loss
+
+                pbar.update(1)
+
+    num_input = min(num_input, len(loss_table.flatten()))
+    min_inds = loss_table.flatten().argsort()[:num_input]
+
+    trimmed_trans = trans[min_inds // len(rot)]
+    trimmed_rot = rot[min_inds % len(rot)]
+
+    return trimmed_trans, trimmed_rot
+
+
+def direct_histogram_pose_search(img: torch.Tensor, xyz: torch.Tensor, rgb: torch.Tensor, trans: torch.Tensor, rot: torch.Tensor,
+        num_input: int, num_split_h: int, num_split_w: int) -> Tuple[torch.Tensor, torch.Tensor]:
+
+    """
+    Trim translation starting point & rotation by comparing color histogram intersection. 
+    Here histograms are directly generated without any acceleration scheme as in CPO.
+
+    Args:
+        img: (H, W, 3) torch tensor containing RGB values of the image
+        xyz: (N, 3) torch tensor containing xyz coordinates of the point cloud
+        rgb: (N, 3) torch tensor containing RGB values of the point cloud
+        trans: (K, 3) torch tensor containing translation starting point candidates
+        rot: (K, 3) torch tensor containing starting rotation candidates (yaw component)
+        num_input: number to trim starting translation & rotation
+        num_split_h: Number of split along horizontal direction
+        num_split_w: Number of split along vertical direction
+
+    Returns:
+        trimmed_trans: (num_input, 3) torch tensor containing trimmed translation starting point
+        trimmed_rot: (num_input) torch tensor containing trimmed rotation (yaw component)
+    """
+
+    num_bins = [8, 8, 8]
+
+    img = img.clone().detach() * 255
+    H, W, _ = img.shape
+
+    # masking coordinates to remove pixels whose RGB value is [0, 0, 0]
+    img_mask = torch.zeros([H, W], dtype=torch.bool, device=img.device)
+    img_mask[torch.sum(img == 0, dim=2) != 3] = True
+
+    # histograms are made from split images, then split histogram intersection is summed
+    hist_intersect = torch.zeros((len(trans)), device=img.device)
+    hist_intersect_split = torch.zeros(num_split_h * num_split_w, device=img.device)
+    block_size_h = img.shape[0] // num_split_h
+    block_size_w = img.shape[1] // num_split_w
+
+    with tqdm(desc="Hist Initialization", total=len(trans)) as pbar:
+        for i in range(len(trans)):
+            # rotation matrix
+            R = rot_from_ypr(rot[i])
+
+            # make panorama from xyz, rgb
+            proj_img = make_pano(torch.transpose(torch.matmul(R, torch.transpose(xyz - trans[i], 0, 1)), 0, 1), rgb, resolution=(img.shape[0], img.shape[1]), return_torch=True)
+            proj_mask = torch.zeros([proj_img.shape[0], proj_img.shape[1]], dtype=torch.bool, device=img.device)
+            proj_mask[torch.sum(proj_img == 0, dim=2) != 3] = True
+
+            for h in range(1, num_split_h - 1):
+                for w in range(num_split_w):
+                    # masking split section
+                    block_mask = torch.zeros([proj_img.shape[0], proj_img.shape[1]], dtype=torch.bool, device=img.device)
+                    block_mask[h * block_size_h: (h + 1) * block_size_h, w * block_size_w: (w + 1) * block_size_w] = True
+                    final_mask = torch.logical_and(proj_mask, img_mask)
+                    final_mask = torch.logical_and(final_mask, block_mask)
+                    final_img_mask = torch.logical_and(img_mask, block_mask)
+
+                    tgt_proj_rgb = proj_img[torch.nonzero(final_mask, as_tuple=True)]
+                    gt_proj_rgb = img[torch.nonzero(final_img_mask, as_tuple=True)]
+
+                    # Account for full masks
+                    if len(tgt_proj_rgb) == 0 or len(gt_proj_rgb) == 0:
+                        hist_intersect_split[h * num_split_w + w] = 0.0
+                        break
+
+                    proj_hist = histogram(proj_img, final_mask, num_bins)
+                    img_hist = histogram(img, final_img_mask, num_bins)
+                    hist_intersect_split[h * num_split_w + w] = histogram_intersection(img_hist, proj_hist)
+
+            # consider NaN
+            hist_intersect_split[torch.isnan(hist_intersect_split)] = 0.
+            hist_intersect[i] = hist_intersect_split.sum().item() / (num_split_h * num_split_w)
+
+            pbar.update(1)
+
+    min_inds = hist_intersect.flatten().argsort()[-num_input:]
+    min_inds = torch.flip(min_inds, [0])
+    trimmed_trans = trans[min_inds]
+    trimmed_rot = rot[min_inds]
+
+    return trimmed_trans, trimmed_rot
+
+
+def sampling_histogram_pose_search(img: torch.Tensor, xyz: torch.Tensor, rgb: torch.Tensor, trans: torch.Tensor, rot: torch.Tensor, 
+        num_input: int, num_split_h: int, num_split_w: int, num_intermediate: Optional[int] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Make translation & rotation starting point from sampling loss comparison followed by histogram comparison
+
+    Args:
+        img: (H, W, 3) torch tensor containing RGB values of the image
+        xyz: (N, 3) torch tensor containing xyz coordinates of the point cloud data
+        rgb: (N, 3) torch tensor containing RGB values of the point cloud data
+        trans: (K, 3) torch tensor containing translation starting point candidates
+        rot: (K, 3) torch tensor containing starting rotation candidates (yaw component)
+        num_input: number to trim starting translation & rotation
+        num_split_h: Number of split along horizontal direction
+        num_split_w: Number of split along vertical direction
+        num_intermediate: if criterion is 'loss_hist', num_intermediate is used for trim_input_loss
+
+    Returns:
+        input_trans: (num_input, 3) torch tensor containing starting translation points
+        input_rot: (num_input, 1) torch tensor containing starting rotation
+    """
+
+    input_xyz = xyz
+
+    # trim candidates
+    trimmed_trans, trimmed_rot = sampling_loss_pose_search(img, input_xyz, rgb, trans, rot, num_intermediate)
+    input_trans, input_rot = direct_histogram_pose_search(img, input_xyz, rgb, trimmed_trans, trimmed_rot, 
+        num_input, num_split_h, num_split_w)
+
+    return input_trans, input_rot

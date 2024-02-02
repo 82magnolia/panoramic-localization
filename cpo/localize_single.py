@@ -18,7 +18,7 @@ from utils import (
     histogram_pose_search,
     make_pano
 )
-from cpo.omniloc import refine_pose_sampling_loss
+from cpo.sampling_loss import refine_pose_sampling_loss
 
 
 def localize(cfg: NamedTuple, log_dir: str, query_img_path: str, color_pcd_path: str):

@@ -1,0 +1,13 @@
+torch==1.10.1+cu102
+numpy
+open3d
+scipy
+matplotlib
+tensorflow-cpu
+tqdm
+pyyaml
+opencv-python
+pandas
+Pillow
+kornia
+scikit-learn

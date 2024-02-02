@@ -1,0 +1,16 @@
+torch==1.10.1+cu102
+torchvision
+numpy
+open3d
+scipy
+matplotlib
+tensorflow-cpu
+tqdm
+pyyaml
+opencv-python
+pandas
+Pillow
+kornia
+scikit-learn
+pylsd-nova
+einops
