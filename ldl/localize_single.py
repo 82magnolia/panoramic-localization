@@ -11,7 +11,7 @@ from ldl.utils import (
     sample_from_img,
     make_pano,
 )
-import ldl.data_utils as data_utils
+import data_utils as data_utils
 from ldl.edge_utils import (
     generate_sphere_pts,
     extract_img_line,
@@ -24,7 +24,7 @@ from ldl.pose_estimation import (
     get_matcher,
     refine_from_point_ransac,
 )
-from ldl.dict_utils import get_init_dict
+from dict_utils import get_init_dict_ldl
 from log_utils import save_logger, PoseLogger
 from tqdm import tqdm
 
@@ -117,7 +117,7 @@ def localize(cfg: NamedTuple, log_dir: str, query_img_path: str, color_pcd_path:
         principal_3d[-1, :] *= -1
 
     # Set translation start points
-    init_dict = get_init_dict(cfg)
+    init_dict = get_init_dict_ldl(cfg)
     trans_tensors = generate_trans_points(xyz, init_dict, device=device)
 
     kpts_xyz_list = []

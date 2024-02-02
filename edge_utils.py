@@ -2,7 +2,7 @@ import torch
 from tqdm import tqdm
 import cv2
 import numpy as np
-from ldl.utils import (
+from utils import (
     make_pano,
 )
 from scipy.ndimage import map_coordinates

@@ -17,6 +17,7 @@ import math
 from torch.nn.functional import cosine_similarity
 import os
 from scipy.ndimage import map_coordinates
+from color_utils import histogram, histogram_intersection, color_match
 
 
 def cloud2idx(xyz: torch.Tensor, batched: bool = False) -> torch.Tensor:
@@ -1130,3 +1131,417 @@ def rgb_to_grayscale(
 
     w_r, w_g, w_b = rgb_weights.to(image).unbind()
     return w_r * r + w_g * g + w_b * b
+
+
+def make_score_map_2d(img: torch.Tensor, xyz: torch.Tensor, rgb: torch.Tensor, trans: torch.Tensor, rot: torch.Tensor,
+        num_split_h: int, num_split_w: int, margin: Union[int, tuple]) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Generate map displaying inliers, outliers in query image
+
+    Args:
+        img: (H, W, 3) torch tensor containing RGB values of the image
+        xyz: (N, 3) torch tensor containing xyz coordinates of the point cloud
+        rgb: (N, 3) torch tensor containing RGB values of the point cloud
+        trans: (K, 3) torch tensor containing translation starting point candidates
+        rot: (K, 3) torch tensor containing starting rotation candidates (yaw component)
+        num_split_h: Number of split along horizontal direction
+        num_split_w: Number of split along vertical direction
+        margin: Vertical margin for ignoring zero values
+
+    Returns:
+        max_intersect: (num_split_h, num_split_w) tensor containing the amount each patch is considered an inlier
+    """
+    num_bins = [8, 8, 8]
+
+    img = img.clone().detach() * 255
+    # masking coordinates to remove pixels whose RGB value is [0, 0, 0]
+    img_mask = torch.zeros([img.shape[0], img.shape[1]], dtype=torch.bool, device=img.device)
+    img_mask[torch.sum(img == 0, dim=2) != 3] = True
+
+    # histograms are made from split images, then split histogram intersection is summed
+    tot_intersect = torch.zeros((len(trans), len(rot), num_split_h * num_split_w), device=img.device)
+
+    img_chunk = []
+    for img_hor_chunk in torch.chunk(img, num_split_h, dim=0):
+        img_chunk += [*torch.chunk(img_hor_chunk, num_split_w, dim=1)]
+
+    img_chunk = torch.stack(img_chunk, dim=0)  # (B, H, W, C)
+    img_mask_chunk = torch.zeros(img_chunk.shape[0], img_chunk.shape[1], img_chunk.shape[2], dtype=torch.bool, device=xyz.device)
+    img_mask_chunk[torch.sum(img_chunk == 0, dim=-1) != 3] = True
+    img_hist = histogram(img_chunk, img_mask_chunk, num_bins)
+
+    # Initialize grid sample locations
+    grid_list = [compute_sampling_grid(ypr, num_split_h, num_split_w) for ypr in rot]
+
+    with tqdm(desc="Inlier Detection (2D)", total=len(trans) * len(rot)) as pbar:
+        for i in range(len(trans)):
+            R = torch.eye(3, device=xyz.device)
+            # make panorama from xyz, rgb
+            proj_img = make_pano(torch.transpose(torch.matmul(R, torch.transpose(xyz - trans[i], 0, 1)), 0, 1), rgb, resolution=(img.shape[0], img.shape[1]), return_torch=True)
+
+            # Make chunks which are splits of the original panorama
+            proj_chunk = []
+            for proj_hor_chunk in torch.chunk(proj_img, num_split_h, dim=0):
+                proj_chunk += [*torch.chunk(proj_hor_chunk, num_split_w, dim=1)]
+
+            proj_chunk = torch.stack(proj_chunk, dim=0)  # (B, H, W, C)
+
+            # Mask chunks
+            proj_mask_chunk = torch.zeros(proj_chunk.shape[0], proj_chunk.shape[1], proj_chunk.shape[2], dtype=torch.bool, device=xyz.device)
+            proj_mask_chunk[torch.sum(proj_chunk == 0, dim=-1) != 3] = True
+            proj_mask_chunk = torch.logical_and(proj_mask_chunk, img_mask_chunk)
+
+            # Compute histogram
+            orig_proj_hist = histogram(proj_chunk, proj_mask_chunk, num_bins)  # (num_split_h * num_split_w, num_bins[0], ...)
+            orig_proj_hist = orig_proj_hist.reshape(num_split_h, num_split_w, -1)
+
+            for j in range(len(rot)):
+                proj_hist = warp_from_img(orig_proj_hist, grid_list[j], padding='reflection', mode='nearest').reshape(-1, *num_bins)
+                cand_intersect = histogram_intersection(img_hist, proj_hist)
+                tot_intersect[i, j] = cand_intersect
+                pbar.update(1)
+
+        # Outlier rejection
+        max_intersect = tot_intersect.reshape(-1, num_split_h * num_split_w).max(0).values
+        max_intersect = max_intersect.reshape(num_split_h, num_split_w)
+        if margin is not None:
+            if isinstance(margin, int):
+                max_intersect[:margin] = 0
+                max_intersect[-margin:] = 0
+                max_intersect[margin:-margin] = torch.nn.functional.avg_pool2d(max_intersect[margin:-margin].unsqueeze(0).unsqueeze(1), stride=1, kernel_size=3, padding=1, count_include_pad=False).squeeze()
+            else:  # margin is tuple
+                max_intersect[:margin[0]] = 0
+                max_intersect[-margin[1]:] = 0
+                max_intersect[margin[0]:-margin[1]] = torch.nn.functional.avg_pool2d(max_intersect[margin[0]:-margin[1]].unsqueeze(0).unsqueeze(1), stride=1, kernel_size=3, padding=1, count_include_pad=False).squeeze()
+        else:
+            max_intersect = torch.nn.functional.avg_pool2d(max_intersect.unsqueeze(0).unsqueeze(1), stride=1, kernel_size=3, padding=1, count_include_pad=False).squeeze()
+
+        return max_intersect
+
+
+def process_score_map_2d(img, inlier_map, method, inlier_thres):
+    new_inlier_map = inlier_map.clone().detach()
+    if method == 'absolute_thres':
+        # Make boolean map for hard thresholding
+        H, W = new_inlier_map.shape
+        new_inlier_map = new_inlier_map.flatten()
+        new_inlier_map[new_inlier_map >= inlier_thres] = 1.0
+        new_inlier_map[new_inlier_map < inlier_thres] = 0.0
+        new_inlier_map = new_inlier_map.reshape(H, W)
+        new_inlier_map = torch.nn.functional.interpolate(new_inlier_map.reshape(1, 1, H, W), size=[img.shape[0], img.shape[1]]).squeeze()
+
+        if isinstance(img, np.ndarray):
+            new_inlier_map = new_inlier_map.bool().cpu().numpy()
+            return new_inlier_map
+        elif isinstance(img, torch.Tensor):
+            new_inlier_map = new_inlier_map.bool()
+            return new_inlier_map
+    
+    elif method == 'preserve':
+        H, W = new_inlier_map.shape
+        new_inlier_map = torch.nn.functional.interpolate(new_inlier_map.reshape(1, 1, H, W), size=[img.shape[0], img.shape[1]]).squeeze()
+
+        if isinstance(img, np.ndarray):
+            new_inlier_map = new_inlier_map.cpu().numpy()
+            return new_inlier_map
+        elif isinstance(img, torch.Tensor):
+            new_inlier_map = new_inlier_map
+            return new_inlier_map
+
+
+def make_score_map_3d(img: torch.Tensor, xyz: torch.Tensor, rgb: torch.Tensor, trans: torch.Tensor, rot: torch.Tensor,
+        num_split_h: int, num_split_w: int, margin: Union[int, tuple], filename: str = None, num_query: int = 1, match_rgb: bool = True) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Generate map displaying inliers, outliers in point cloud
+
+    Args:
+        img: (H, W, 3) torch tensor containing RGB values of the image
+        xyz: (N, 3) torch tensor containing xyz coordinates of the point cloud
+        rgb: (N, 3) torch tensor containing RGB values of the point cloud
+        trans: (K, 3) torch tensor containing translation starting point candidates
+        rot: (K, 3) torch tensor containing starting rotation candidates (yaw component)
+        num_split_h: Number of split along horizontal direction
+        num_split_w: Number of split along vertical direction
+        margin: Vertical margin for ignoring zero values
+        filename: If provided, specifies the directory where query images are saved
+        num_query: Number of query images to generate score pcd. If not specified, defaults to 1
+        match_rgb: If True, matches query images with point cloud's distribution
+
+    Returns:
+        score_cloud: (N, 1) tensor containing the amount each point is considered an inlier
+    """
+    num_bins = [8, 8, 8]
+    if num_query == 1:
+        img_list = [img.clone().detach() * 255]
+    else:
+        # Pick num_query images to use for generating score point cloud
+        H, W, _ = img.shape
+        extension = filename.split('.')[-1]
+        img_files = sorted(glob(os.path.join(*(filename.split('/')[:-1] + [f"*.{extension}"]))))  # Sort for deterministic results
+        np.random.seed(2)  # Set for deterministic results
+        img_idx = np.random.choice(np.array(range(len(img_files))), size=min(num_query, len(img_files)), replace=False).tolist()
+        
+        if match_rgb:
+            img_list = [cv2.resize(cv2.cvtColor(cv2.imread(img_files[idx]), cv2.COLOR_BGR2RGB), (2048, 1024)) for idx in img_idx]
+            img_list = [torch.from_numpy(img_np).float().to(xyz.device) for img_np in img_list]
+            img_list = [color_match(img_tch / 255., rgb) * 255 for img_tch in img_list]
+            img_list = [torch.from_numpy(cv2.resize(img_tch.cpu().numpy().astype(np.uint8), (W, H))).float().to(xyz.device) for img_tch in img_list]
+        else:
+            img_list = [cv2.resize(cv2.cvtColor(cv2.imread(img_files[idx]), cv2.COLOR_BGR2RGB), (W, H)) for idx in img_idx]
+            img_list = [torch.from_numpy(img_np).float().to(xyz.device) for img_np in img_list]
+
+    with tqdm(desc="Inlier Detection (3D)", total=len(trans) * len(rot)) as pbar:
+        # Point cloud where scores will be saved
+        score_cloud = torch.zeros([xyz.shape[0], 1], device=xyz.device)
+        # Initialize grid sample locations
+        grid_list = [compute_sampling_grid(ypr, num_split_h, num_split_w) for ypr in rot]
+
+        # Obtain inverse grid sample locations
+        inv_grid_list = [compute_sampling_grid(ypr, num_split_h, num_split_w, inverse=True) for ypr in rot]
+
+        total_count = 0  # Used for running average tracking
+
+        img_hist_list = []
+
+        # Cache all histograms from selected query images
+        for img in img_list:
+            # masking coordinates to remove pixels whose RGB value is [0, 0, 0]
+            img_mask = torch.zeros([img.shape[0], img.shape[1]], dtype=torch.bool, device=img.device)
+            img_mask[torch.sum(img == 0, dim=2) != 3] = True
+
+            img_chunk = []
+            for img_hor_chunk in torch.chunk(img, num_split_h, dim=0):
+                img_chunk += [*torch.chunk(img_hor_chunk, num_split_w, dim=1)]
+
+            img_chunk = torch.stack(img_chunk, dim=0)  # (B, H, W, C)
+            img_mask_chunk = torch.zeros(img_chunk.shape[0], img_chunk.shape[1], img_chunk.shape[2], dtype=torch.bool, device=xyz.device)
+            img_mask_chunk[torch.sum(img_chunk == 0, dim=-1) != 3] = True
+            img_hist = histogram(img_chunk, img_mask_chunk, num_bins)
+            img_hist_list.append(img_hist)
+
+        # Generate intersections with synthetic views
+        for i in range(len(trans)):
+            R = torch.eye(3, device=xyz.device)
+            # make panorama from xyz, rgb
+            proj_img, proj_coords = make_pano(torch.transpose(torch.matmul(R, torch.transpose(xyz - trans[i], 0, 1)), 0, 1), rgb, 
+                resolution=(img.shape[0], img.shape[1]), return_torch=True, return_coord=True)
+
+            # Coordinates are in (i, j) format
+            quant_proj_coords = torch.zeros_like(proj_coords, dtype=torch.float)
+            quant_proj_coords[:, 0] = proj_coords[:, 0].float() * (num_split_h / img.shape[0])
+            quant_proj_coords[:, 1] = proj_coords[:, 1].float() * (num_split_w / img.shape[1]) 
+            quant_proj_coords = quant_proj_coords.long()
+
+            # Make chunks which are splits of the original panorama
+            proj_chunk = []
+            for proj_hor_chunk in torch.chunk(proj_img, num_split_h, dim=0):
+                proj_chunk += [*torch.chunk(proj_hor_chunk, num_split_w, dim=1)]
+
+            proj_chunk = torch.stack(proj_chunk, dim=0)  # (B, H, W, C)
+
+            # Mask chunks
+            proj_mask_chunk = torch.zeros(proj_chunk.shape[0], proj_chunk.shape[1], proj_chunk.shape[2], dtype=torch.bool, device=xyz.device)
+            proj_mask_chunk[torch.sum(proj_chunk == 0, dim=-1) != 3] = True
+            proj_mask_chunk = torch.logical_and(proj_mask_chunk, img_mask_chunk)
+
+            # Compute histogram
+            orig_proj_hist = histogram(proj_chunk, proj_mask_chunk, num_bins)  # (num_split_h * num_split_w, num_bins[0], ...)
+            orig_proj_hist = orig_proj_hist.reshape(num_split_h, num_split_w, -1)
+
+            for j in range(len(rot)):
+                proj_hist = warp_from_img(orig_proj_hist, grid_list[j], padding='reflection', mode='nearest').reshape(-1, *num_bins)
+
+                # Iterate over each image
+                for img_hist in img_hist_list:
+                    cand_intersect = histogram_intersection(img_hist, proj_hist)
+                    total_count += 1
+
+                    # Assign scores to score_cloud, note that warped histograms are inverted to original identity rotation to match with quant_proj_coords
+                    inv_hist = warp_from_img(cand_intersect.reshape(num_split_h, num_split_w, 1), inv_grid_list[j], padding='reflection', mode='nearest')
+                    update = inv_hist[(quant_proj_coords[:, 0], quant_proj_coords[:, 1])]
+                    update[update == 0.] = score_cloud[update == 0.]
+                    score_cloud = score_cloud * (total_count - 1) / total_count + update * 1 / total_count
+                pbar.update(1)
+        
+        # Normalize score_cloud to range in [0, 1]
+        score_cloud = (score_cloud - score_cloud.min()) / (score_cloud.max() - score_cloud.min())
+        return score_cloud
+
+
+def process_split_intersection(cand_intersect: torch.tensor, stat: str = 'mean', low_cutoff=0.25, high_cutoff=0.75):
+    # Process intersection values of shape (B, ) with a designated statistic
+    if stat == 'mean':
+        if cand_intersect.nonzero(as_tuple=False).shape[0] != 0:
+            hist_intersect = cand_intersect.sum().item() / cand_intersect.nonzero(as_tuple=False).shape[0]
+        else:
+            hist_intersect = 0.0
+    elif stat == 'midhinge':
+        cand_intersect = cand_intersect[cand_intersect != 0.0].sort()[0]
+        hist_intersect = ((cand_intersect[int(cand_intersect.shape[0] * low_cutoff)]
+            + cand_intersect[int(cand_intersect.shape[0] * high_cutoff)]) / 2.).item()
+    elif stat == 'median':
+        hist_intersect = cand_intersect[cand_intersect != 0.0].median().item()
+    elif stat == 'interquartile':
+        cand_intersect = cand_intersect[cand_intersect != 0.0].sort()[0]
+        hist_intersect = cand_intersect[int(cand_intersect.shape[0] * low_cutoff): int(cand_intersect.shape[0] * high_cutoff)].mean().item()
+    elif stat == 'winsorized':
+        cand_intersect = cand_intersect[cand_intersect != 0.0].sort()[0]
+        q1_idx = int(cand_intersect.shape[0] * low_cutoff)
+        q3_idx = int(cand_intersect.shape[0] * high_cutoff)
+        cand_intersect[:q1_idx] = cand_intersect[q1_idx]
+        cand_intersect[q3_idx:] = cand_intersect[q3_idx]
+        hist_intersect = cand_intersect.mean().item()
+
+    return hist_intersect
+
+
+def compute_sin_grid(num_split_h, num_split_w, device):
+    H, W = num_split_h, num_split_w
+    a = create_coordinate(H, W, device)
+    a[..., 1] += np.pi / (num_split_h * 2)
+    sin_grid = torch.sin(a[..., 1])  # H, W
+    return sin_grid
+
+
+def histogram_pose_search(img: torch.Tensor, xyz: torch.Tensor, rgb: torch.Tensor, trans: torch.Tensor, rot: torch.Tensor,
+        num_input: int, num_split_h: int, num_split_w: int, img_weight: torch.tensor, use_sin_weight: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Trim translation starting point & rotation by comparing color histrogram in a highly accelerated fashion with cached rotation.
+
+    Args:
+        img: (H, W, 3) torch tensor containing RGB values of the image
+        xyz: (N, 3) torch tensor containing xyz coordinates of the point cloud
+        rgb: (N, 3) torch tensor containing RGB values of the point cloud
+        trans: (K, 3) torch tensor containing translation starting point candidates
+        rot: (K, 3) torch tensor containing starting rotation candidates (yaw component)
+        num_input: number to trim starting translation & rotation
+        num_split_h: Number of split along horizontal direction
+        num_split_w: Number of split along vertical direction
+        img_weight: Weight mask applied to image
+        use_sin_weight: If True, uses sin weight for histogram intersection
+
+    Returns:
+        trimmed_trans: (num_input, 3) torch tensor containing trimmed translation starting point
+        trimmed_rot: (num_input) torch tensor containing trimmed rotation (yaw component)
+    """
+    num_bins = [8, 8, 8]
+
+    img = img.clone().detach() * 255
+    # masking coordinates to remove pixels whose RGB value is [0, 0, 0]
+    img_mask = torch.zeros([img.shape[0], img.shape[1]], dtype=torch.bool, device=img.device)
+    img_mask[torch.sum(img == 0, dim=2) != 3] = True
+
+    # histograms are made from split images, then split histogram intersection is summed
+    hist_intersect = torch.zeros((len(trans), len(rot)), device=img.device)
+
+    img_chunk = []
+    for img_hor_chunk in torch.chunk(img, num_split_h, dim=0):
+        img_chunk += [*torch.chunk(img_hor_chunk, num_split_w, dim=1)]
+
+    img_chunk = torch.stack(img_chunk, dim=0)  # (B, H, W, C)
+    img_mask_chunk = torch.zeros(img_chunk.shape[0], img_chunk.shape[1], img_chunk.shape[2], dtype=torch.bool, device=xyz.device)
+    img_mask_chunk[torch.sum(img_chunk == 0, dim=-1) != 3] = True
+    img_hist = histogram(img_chunk, img_mask_chunk, num_bins)
+
+    # Initialize grid sample locations
+    grid_list = [compute_sampling_grid(ypr, num_split_h, num_split_w) for ypr in rot]
+    sin_weight = compute_sin_grid(num_split_h, num_split_w, xyz.device)
+
+    with tqdm(desc="Hist Initialization", total=len(trans) * len(rot)) as pbar:
+        for i in range(len(trans)):
+            R = torch.eye(3, device=xyz.device)
+            # make panorama from xyz, rgb
+            proj_img = make_pano(torch.transpose(torch.matmul(R, torch.transpose(xyz - trans[i], 0, 1)), 0, 1), rgb, resolution=(img.shape[0], img.shape[1]), return_torch=True)
+
+            # Make chunks which are splits of the original panorama
+            proj_chunk = []
+            for proj_hor_chunk in torch.chunk(proj_img, num_split_h, dim=0):
+                proj_chunk += [*torch.chunk(proj_hor_chunk, num_split_w, dim=1)]
+
+            proj_chunk = torch.stack(proj_chunk, dim=0)  # (B, H, W, C)
+
+            # Mask chunks
+            proj_mask_chunk = torch.zeros(proj_chunk.shape[0], proj_chunk.shape[1], proj_chunk.shape[2], dtype=torch.bool, device=xyz.device)
+            proj_mask_chunk[torch.sum(proj_chunk == 0, dim=-1) != 3] = True
+            proj_mask_chunk = torch.logical_and(proj_mask_chunk, img_mask_chunk)
+
+            # Compute histogram
+            orig_proj_hist = histogram(proj_chunk, proj_mask_chunk, num_bins)  # (num_split_h * num_split_w, num_bins[0], ...)
+            orig_proj_hist = orig_proj_hist.reshape(num_split_h, num_split_w, -1)
+
+            for j in range(len(rot)):
+                proj_hist = warp_from_img(orig_proj_hist, grid_list[j], padding='reflection', mode='nearest').reshape(-1, *num_bins)
+                cand_intersect = histogram_intersection(img_hist, proj_hist)
+                if use_sin_weight and img_weight is None:
+                    cand_intersect *= sin_weight.flatten()
+                elif use_sin_weight and img_weight is not None:
+                    cand_intersect *= (sin_weight.flatten() * 0.5 + img_weight.flatten() * 0.5)
+                elif not use_sin_weight and img_weight is not None:
+                    cand_intersect *= img_weight.flatten()
+                hist_intersect[i, j] = process_split_intersection(cand_intersect)
+                pbar.update(1)
+
+        min_inds = hist_intersect.flatten().argsort()[-num_input:]
+
+        trimmed_trans = trans[min_inds // len(rot)]
+        trimmed_rot = rot[min_inds % len(rot)]
+
+        return trimmed_trans, trimmed_rot
+
+
+def refine_sampling_coords(img_idx: torch.tensor, rho: torch.tensor, rgb: torch.tensor, quantization: Tuple[int, int] = (1024, 2048), batched: bool = False,
+    return_valid_mask: bool = False):
+    """
+    Refine sampling coordinates by removing occluded points
+    Args:
+        img_idx: (N, 2) torch tensor containing projected image coordinates in normalized (i, j) frame, that is, space in [-1, 1] x [-1, 1]
+        rho: (N, ) torch tensor containing distance from camera
+        rgb: (N, 3) torch tensor containing RGB values of point clouds
+        quantization: Tuple containing (H, W) used for generating coordinate keys
+        batched: If True assumes an additional batch dimension for img_idx, rho
+        return_valid_mask: If True, returns valid_mask instead of indices. Only activated if batched is False.
+
+    Returns:
+        If not batched:
+            argmin: (N, ) torch tensor containing filtered index values
+        If batched:
+            valid_mask: (B, N) torch tensor containing valid filtered indices. Only returned if batched is True
+
+    Note:
+        If batched is True, argmin is a (B, N_max) tensor where N_max is the maximum length of filtered indices in a batch
+    """
+    if batched:
+        # Generate coordinate keys to aggregate from!
+        H, W = quantization
+        max_len = img_idx.shape[1]  # Number of total points
+        # coord_key is shape (B, N)
+        coord_key = ((img_idx[..., 1] + 1.).clamp(min=0, max=2) / 2.0 * H).long() * W + (((img_idx[..., 0] + 1.).clamp(min=0, max=2) / 2.0) * W).long()  # (i-coordinate) * W + (j-coordinate)
+
+        try:
+            _, argmin = scatter_min(rho, coord_key, dim=1)
+        except RuntimeError:
+            argmin = torch.arange(max_len).expand(coord_key.shape[0], -1)  # (B, N)
+
+        valid_mask = torch.zeros_like(coord_key, dtype=torch.bool, device=rgb.device)
+        for idx in range(coord_key.shape[0]):
+            valid_mask[idx, argmin[idx, argmin[idx] < max_len]] = True
+
+        return argmin, valid_mask
+    else:
+        # Generate coordinate keys to aggregate from!
+        H, W = quantization
+
+        coord_key = ((img_idx[:, 1] + 1.).clamp(min=0, max=2) / 2.0 * H).long() * W + (((img_idx[:, 0] + 1.).clamp(min=0, max=2) / 2.0) * W).long()  # (i-coordinate) * W + (j-coordinate)
+
+        try:
+            _, argmin = scatter_min(rho, coord_key)
+        except RuntimeError:
+            argmin = torch.arange(len(img_idx))
+
+        if return_valid_mask:
+            valid_mask = torch.zeros_like(coord_key, dtype=torch.bool, device=rgb.device)
+            valid_mask[argmin[argmin < coord_key.shape[0]]] = True
+            return valid_mask
+        else:
+            argmin = argmin[argmin < len(img_idx)]
+            return argmin

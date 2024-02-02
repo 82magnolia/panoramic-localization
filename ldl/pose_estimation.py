@@ -1,9 +1,10 @@
 import torch
-from ldl.utils import (
+from utils import (
     cloud2idx,
     ij2coord,
     make_pano,
     sample_from_img,
+    rgb_to_grayscale,
 )
 import cv2
 try:
@@ -13,13 +14,12 @@ except ImportError:
     pass
 from ldl.superglue_models.matching import Matching
 import numpy as np
-from ldl.utils import rgb_to_grayscale
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import os
 from scipy.ndimage import binary_dilation
 import torch.nn as nn
-from ldl.edge_utils import split_func_2d_batch, split_func_3d_batch
+from edge_utils import split_func_2d_batch, split_func_3d_batch
 
 
 def split_distance_cost(query_points, trans_tensor, rot_mtx, mask_2d, mask_3d, edge_2d, starts_3d, ends_3d, method='mean'):
