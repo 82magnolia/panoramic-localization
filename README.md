@@ -2,7 +2,7 @@
 Panoramic localization library containing PyTorch implementations of various panoramic localization algorithms: [PICCOLO](https://openaccess.thecvf.com/content/ICCV2021/html/Kim_PICCOLO_Point_Cloud-Centric_Omnidirectional_Localization_ICCV_2021_paper.html) (ICCV 2021), [CPO](https://www.ecva.net/papers/eccv_2022/papers_ECCV/html/1567_ECCV_2022_paper.php) (ECCV 2022), and [LDL](https://openaccess.thecvf.com/content/ICCV2023/html/Kim_LDL_Line_Distance_Functions_for_Panoramic_Localization_ICCV_2023_paper.html) (ICCV 2023).
 Please refer to the links below to run each of the localization algorithms.
 
-* PICCOLO: TBD 
+* PICCOLO: [Link](https://github.com/82magnolia/panoramic-localization#running-piccolo) 
 * CPO: [Link](https://github.com/82magnolia/panoramic-localization#running-cpo)
 * LDL: [Link](https://github.com/82magnolia/panoramic-localization#running-ldl)
 
@@ -106,25 +106,29 @@ To run the codebase, you need [Anaconda](https://www.anaconda.com/). Once you ha
 
 In addition, you must install pytorch_scatter. Follow the instructions provided in [the pytorch_scatter github repo](https://github.com/rusty1s/pytorch_scatter). You need to install the version for torch 1.7.0 and CUDA 10.1.
 
-## Running LDL
+## Running PICCOLO
 ### Stanford 2D-3D-S or OmniScenes
 Run the following command for Stanford 2D-3D-S.
 ```
-python main.py --config config/stanford_ldl.ini --log log/ldl_test --method ldl
+python main.py --config config/stanford_piccolo.ini --log log/piccolo_test --method piccolo
 ```
 
 Similarly, run the following command for OmniScenes
 ```
-python main.py --config config/omniscenes_ldl.ini --log log/ldl_test --method ldl
+python main.py --config config/omniscenes_piccolo.ini --log log/piccolo_test --method piccolo
+```
+
+Note the sampling loss optimization can be done in parallel (with a slight sacrifice in localization accuracy), using the following command.
+```
+python main.py --config config/omniscenes_piccolo.ini --log log/piccolo_test --method piccolo --override 'refine_parallel=True'
 ```
 
 ### Preparing and Testing on Your Own Data
 We also provide scripts for directly testing on your own data. 
 First, prepare a query panorama image and 3D colored point cloud.
-Then, extract 3D line segments using the [following repository](https://github.com/xiaohulugo/3DLineDetection).
-Finally, run the following command, and the renderings at the localized pose will be saved in the log directory.
+Then, run the following command, and the renderings at the localized pose will be saved in the log directory.
 ```
-python main.py --config config/omniscenes_ldl.ini --log LOG_DIRECTORY --method ldl --single --query_img PATH_TO_QUERY_IMG --color_pcd PATH_TO_COLORED_POINT_CLOUD --line_pcd PATH_TO_LINE_CLOUD
+python main.py --config config/omniscenes_piccolo.ini --log LOG_DIRECTORY --method piccolo --single --query_img PATH_TO_QUERY_IMG --color_pcd PATH_TO_COLORED_POINT_CLOUD
 ```
 
 ## Running CPO
@@ -144,7 +148,28 @@ We also provide scripts for directly testing on your own data.
 First, prepare a query panorama image and 3D colored point cloud.
 Then, run the following command, and the renderings at the localized pose will be saved in the log directory.
 ```
-python main.py --config config/omniscenes_cpo.ini --log LOG_DIRECTORY --method cpo --single --query_img PATH_TO_QUERY_IMG --color_pcd PATH_TO_COLORED_POINT_CLOUD --line_pcd PATH_TO_LINE_CLOUD
+python main.py --config config/omniscenes_cpo.ini --log LOG_DIRECTORY --method cpo --single --query_img PATH_TO_QUERY_IMG --color_pcd PATH_TO_COLORED_POINT_CLOUD
+```
+
+## Running LDL
+### Stanford 2D-3D-S or OmniScenes
+Run the following command for Stanford 2D-3D-S.
+```
+python main.py --config config/stanford_ldl.ini --log log/ldl_test --method ldl
+```
+
+Similarly, run the following command for OmniScenes
+```
+python main.py --config config/omniscenes_ldl.ini --log log/ldl_test --method ldl
+```
+
+### Preparing and Testing on Your Own Data
+We also provide scripts for directly testing on your own data. 
+First, prepare a query panorama image and 3D colored point cloud.
+Then, extract 3D line segments using the [following repository](https://github.com/xiaohulugo/3DLineDetection).
+Finally, run the following command, and the renderings at the localized pose will be saved in the log directory.
+```
+python main.py --config config/omniscenes_ldl.ini --log LOG_DIRECTORY --method ldl --single --query_img PATH_TO_QUERY_IMG --color_pcd PATH_TO_COLORED_POINT_CLOUD --line_pcd PATH_TO_LINE_CLOUD
 ```
 
 ## Checking log files
