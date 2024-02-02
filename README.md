@@ -30,7 +30,7 @@ First ownload the panorama images (`pano`) and poses (`pose`) from the following
 Also, download the 3D line segments through the following [link](https://drive.google.com/file/d/1Ur67nN8Q2n_CXQxbI341TRUbQEmtEjuD/view?usp=sharing).
 Then, place the data in the directory structure below.
 
-    piccolo/data
+    panoramic-localization/data
     └── stanford (Stanford2D-3D-S Dataset)
         ├── pano (panorama images)
         │   ├── area_1
@@ -66,7 +66,7 @@ Note we are using the **old** version of OmniScenes for this repository.
 In addition, download the 3D line segments through the following [link](https://drive.google.com/file/d/1M7A5iDXQdrPVUNmhKWRSFMQKit07jOK8/view?usp=sharing).
 Then, place the data in the directory structure below.
 
-    piccolo/data
+    panoramic-localization/data
     └── omniscenes (OmniScenes Dataset)
         ├── change_handheld_pano (panorama images)
         │   ├── handheld_pyebaekRoom_1_scene_2 (scene folder)
