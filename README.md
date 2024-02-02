@@ -3,7 +3,7 @@ Panoramic localization library containing PyTorch implementations of various pan
 Please refer to the links below to run each of the localization algorithms.
 
 * PICCOLO: TBD 
-* CPO: TBD
+* CPO: [Link](https://github.com/82magnolia/panoramic-localization#running-cpo)
 * LDL: [Link](https://github.com/82magnolia/panoramic-localization#running-ldl)
 
 ## Description of Each Localization Algorithm
