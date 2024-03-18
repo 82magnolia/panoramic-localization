@@ -170,10 +170,6 @@ Similarly, run the following command for OmniScenes
 python main.py --config config/omniscenes_ldl.ini --log log/ldl_test --method ldl
 ```
 
-## Running FPGL
-### Stanford 2D-3D-S or OmniScenes
-To be updated.
-
 ### Preparing and Testing on Your Own Data
 We also provide scripts for directly testing on your own data. 
 First, prepare a query panorama image and 3D colored point cloud.
@@ -182,6 +178,13 @@ Finally, run the following command, and the renderings at the localized pose wil
 ```
 python main.py --config config/omniscenes_ldl.ini --log LOG_DIRECTORY --method ldl --single --query_img PATH_TO_QUERY_IMG --color_pcd PATH_TO_COLORED_POINT_CLOUD --line_pcd PATH_TO_LINE_CLOUD
 ```
+
+## Running FPGL
+### Stanford 2D-3D-S or OmniScenes
+To be updated.
+
+### Preparing and Testing on Your Own Data
+To be updated.
 
 ## Checking log files
 Results from localization will be saved in `.pkl` files. To open a single `.pkl` file and print the recall at `0.1m, 5deg`, run the following command.
