@@ -101,7 +101,7 @@ def generate_sphere_pts(level, type='torch', device='cpu'):
 
 # Extraction functions
 
-def extract_img_line(img, view_size=320, return_edge_img=False, length_thres=None, length_topk=None, length_ratio=None):
+def extract_img_line(img, view_size=320, return_edge_img=False, return_full_lines=False, length_thres=None, length_topk=None, length_ratio=None):
     """
     Code excerpted from https://github.com/sunset1995/HorizonNet.
     Extract line segments from an input panorama image.
@@ -110,6 +110,7 @@ def extract_img_line(img, view_size=320, return_edge_img=False, length_thres=Non
         img: Input image, normalized to range in 0~256
         view_size: Image size of cropped views to perform LSD
         return_edge_img: If True, returns edge image painted with detected edges
+        return_full_lines: If True, returns full lines before filtering
         length_thres: If specified, filters lines over length threshold
         length_topk: If specified, only returns lines with top-k length
         length_ratio: If specified, only returns lines with top-ratio length
@@ -141,6 +142,7 @@ def extract_img_line(img, view_size=320, return_edge_img=False, length_thres=Non
         edge[-1]['panoLst'] = edgeFromImg2Pano(edge[-1])
 
     lines, coordN_lines = combineEdgesN(edge)
+    full_coordN_lines = coordN_lines.copy()
     
     if length_thres is not None:
         coordN_lines, valid_mask = filterEdgeByThres(coordN_lines, length_thres, True)
@@ -161,11 +163,21 @@ def extract_img_line(img, view_size=320, return_edge_img=False, length_thres=Non
     coordN_lines[:, 3:6] = coordN_lines[:, 3:6] @ rot_mtx
     coordN_lines[:, 6:9] = coordN_lines[:, 6:9] @ rot_mtx
 
+    full_coordN_lines[:, :3] = full_coordN_lines[:, :3] @ rot_mtx
+    full_coordN_lines[:, 3:6] = full_coordN_lines[:, 3:6] @ rot_mtx
+    full_coordN_lines[:, 6:9] = full_coordN_lines[:, 6:9] @ rot_mtx
+
     if return_edge_img:
         panoEdge = paint_line(lines, img.shape[1], img.shape[0])
-        return coordN_lines, panoEdge
+        if return_full_lines:
+            return coordN_lines, panoEdge, full_coordN_lines
+        else:
+            return coordN_lines, panoEdge
     else:
-        return coordN_lines
+        if return_full_lines:
+            return coordN_lines, full_coordN_lines
+        else:
+            return coordN_lines
 
 
 def make_pano_line_2d(edge_2d, resolution=(400, 800), rot_mtx=None, rgb=None):
@@ -379,7 +391,7 @@ def split_func_3d(query_points, starts, ends, trans_mtx, rot_mtx, edge_3d_mask, 
     return dist_3d
 
 
-def split_func_2d_batch(query_points, edge_2d, edge_2d_mask):
+def split_func_2d_batch(query_points, edge_2d, edge_2d_mask, rot_mtx=None, perms=None, single_pose_compute=False):
     """
     Function that returns distance functions for a set of edge in 2D, split by type specified in edge_2d_mask.
     Here the edge_2d_mask is applied in a parallel manner. Note that query points should be normalized.
@@ -388,12 +400,25 @@ def split_func_2d_batch(query_points, edge_2d, edge_2d_mask):
         query_points: (N_q, 3) tensor containing points to query
         edge_2d: (N_2D, 9) tensor containing 2D edges in [normals starts ends] format
         edge_2d_mask: (N_2D, K) or (N_r, N_2D, K) tensor containing masks for each 2D line, which may belong to K edge types
-    
+        rot_mtx: (N_r, 3, 3) tensor containing rotation candidate poses
+        perms: (N_r, 3) tensor containing permutations used for obtaining rotations
+        single_pose_compute: If True, compute distance functions for the first pose and obtain distance functions for other views via NN interpolation
+
     Returns:
         dist_2d: (N_q, K) or (N_r, N_q, K) tensor containing distance to nearest edges separated by types provided in edge_2d_mask
-    """    
-    dist_2d = distance_func_2d(query_points, edge_2d, edge_2d_mask)
-
+    """
+    if single_pose_compute:
+        assert rot_mtx is not None and perms is not None
+        N_q = query_points.shape[0]
+        N_k = edge_2d_mask.shape[-1]
+        dist_2d = distance_func_2d(query_points, edge_2d, edge_2d_mask, rot_mtx=None)  # (N_q, N_k)
+        rot_query_points = query_points @ rot_mtx.permute(0, 2, 1)  # (N_r, N_q, N_k)
+        rot_nn_dist = (rot_query_points.unsqueeze(2) - query_points.reshape(1, 1, N_q, N_k)).norm(dim=-1)  # (N_r, N_q, N_q)
+        rot_nn_idx = rot_nn_dist.argmin(-1)  # (N_r, N_q)
+        dist_2d = dist_2d[:, perms].permute(1, 0, 2)  # (N_r, N_q, N_k)
+        dist_2d = torch.gather(dist_2d, 1, rot_nn_idx.unsqueeze(-1).repeat(1, 1, N_k))  # (N_r, N_q, N_k)
+    else:
+        dist_2d = distance_func_2d(query_points, edge_2d, edge_2d_mask, rot_mtx=rot_mtx)
     return dist_2d
 
 
@@ -420,7 +445,8 @@ def split_func_3d_batch(query_points, starts, ends, trans_mtx, rot_mtx, edge_3d_
 
 # Distance functions
 
-def distance_func_2d(query_points, edge_2d, mask=None):
+
+def distance_func_2d(query_points, edge_2d, mask=None, return_raw=False, rot_mtx=None):
     """
     Function that returns the closest distance to a set of edges in a 2D panorama image.
     Note that query points should be normalized.
@@ -429,46 +455,103 @@ def distance_func_2d(query_points, edge_2d, mask=None):
         query_points: (N_q, 3) tensor containing points to query
         edge_2d: (N_2D, 9) tensor containing 2D edges in [normals starts ends] format
         mask: (N_2D, K) or (N_r, N_2D, K) tensor containing boolean values for lines belonging to one of K classes
-    
+        return_raw: If True, return raw (N_q, N_2D) spherical distance matrix
+        rot_mtx: (N_r, 3, 3) tensor containing rotation candidate poses, where the rotation inverses will be applied to the lines
+
     Returns:
         dist_2d: (N_q, ), (N_q, K), or (N_r, N_q, K) tensor containing distance to nearest edges
     """
-    if edge_2d.shape[0] == 0: # Return all infinity if there are no edges
+    if edge_2d.shape[0] == 0:  # Return all infinity if there are no edges
         return torch.ones_like(query_points[:, 0]) * np.inf
 
-    normals = edge_2d[:, :3]
-    starts = edge_2d[:, 3:6]
-    ends = edge_2d[:, 6:]
+    if rot_mtx is None:  # Calculate distance function for fix line
+        normals = edge_2d[:, :3]
+        starts = edge_2d[:, 3:6]
+        ends = edge_2d[:, 6:]
+        
+        cos_theta = (starts * ends).sum(-1).unsqueeze(0)  # (1, N_2D)
+        cos_theta1 = (query_points @ starts.t())  # (N_q, N_2D)
+        cos_theta2 = (query_points @ ends.t())  # (N_q, N_2D)
+
+        normal_acute = np.pi / 2 - torch.arccos(torch.abs(query_points @ normals.t()).clip_(min=-1., max=1.))  # Angle between edge point and line normal
+        theta1 = torch.arccos(cos_theta1.clip_(min=-1., max=1.))  # Angle between edge point and line start
+        theta2 = torch.arccos(cos_theta2.clip_(min=-1., max=1.))  # Angle between edge point and line end
+
+        # Determine if angles of spherical triangle are over 90 degrees
+        sign_arc_theta1 = (cos_theta1 - cos_theta * cos_theta2 > 0)  # Positive indicates arc_theta1 is smaller than 90
+        sign_arc_theta2 = (cos_theta2 - cos_theta * cos_theta1 > 0)
+
+        sphere_dist = (sign_arc_theta1 & sign_arc_theta2) * normal_acute + \
+            torch.bitwise_not(sign_arc_theta1 & sign_arc_theta2) * torch.minimum(theta1, theta2)  # (N_q, N_2D)
+        
+        if return_raw:
+            return sphere_dist
+
+        if mask is None:
+            dist_2d = sphere_dist.min(-1).values
+        elif len(mask.shape) == 2:
+            MAX_LIMIT = np.pi
+            dist_2d = sphere_dist.unsqueeze(-1) * mask.unsqueeze(0)  # (N_q, N_2D, K)
+            dist_2d += torch.bitwise_not(mask.unsqueeze(0)) * MAX_LIMIT  # Make all other entries not belonging to the class invalid
+            dist_2d = dist_2d.min(1).values  # (N_q, K)
+        elif len(mask.shape) == 3:
+            MAX_LIMIT = np.pi
+            dist_2d = sphere_dist.unsqueeze(-1).unsqueeze(0) * mask.unsqueeze(1)  # (N_r, N_q, N_2D, K)
+            dist_2d += torch.bitwise_not(mask.unsqueeze(1)) * MAX_LIMIT  # Make all other entries not belonging to the class invalid
+            dist_2d = dist_2d.min(2).values  # (N_r, N_q, K)
+        else:
+            raise ValueError("Invalid mask shape")
     
-    cos_theta = (starts * ends).sum(-1).unsqueeze(0)  # (1, N_2D)
-    cos_theta1 = (query_points @ starts.t())  # (N_q, N_2D)
-    cos_theta2 = (query_points @ ends.t())  # (N_q, N_2D)
-
-    normal_acute = np.pi / 2 - torch.arccos(torch.abs(query_points @ normals.t()).clip_(min=-1., max=1.))  # Angle between edge point and line normal
-    theta1 = torch.arccos(cos_theta1.clip_(min=-1., max=1.))  # Angle between edge point and line start
-    theta2 = torch.arccos(cos_theta2.clip_(min=-1., max=1.))  # Angle between edge point and line end
-
-    # Determine if angles of spherical triangle are over 90 degrees
-    sign_arc_theta1 = (cos_theta1 - cos_theta * cos_theta2 > 0)  # Positive indicates arc_theta1 is smaller than 90
-    sign_arc_theta2 = (cos_theta2 - cos_theta * cos_theta1 > 0)
-
-    sphere_dist = (sign_arc_theta1 & sign_arc_theta2) * normal_acute + \
-        torch.bitwise_not(sign_arc_theta1 & sign_arc_theta2) * torch.minimum(theta1, theta2)  # (N_q, N_2D)
-    
-    if mask is None:
-        dist_2d = sphere_dist.min(-1).values
-    elif len(mask.shape) == 2:
-        MAX_LIMIT = np.pi
-        dist_2d = sphere_dist.unsqueeze(-1) * mask.unsqueeze(0)  # (N_q, N_2D, K)
-        dist_2d += torch.bitwise_not(mask.unsqueeze(0)) * MAX_LIMIT  # Make all other entries not belonging to the class invalid
-        dist_2d = dist_2d.min(1).values  # (N_q, K)
-    elif len(mask.shape) == 3:
-        MAX_LIMIT = np.pi
-        dist_2d = sphere_dist.unsqueeze(-1).unsqueeze(0) * mask.unsqueeze(1)  # (N_r, N_q, N_2D, K)
-        dist_2d += torch.bitwise_not(mask.unsqueeze(1)) * MAX_LIMIT  # Make all other entries not belonging to the class invalid
-        dist_2d = dist_2d.min(2).values  # (N_r, N_q, K)
     else:
-        raise ValueError("Invalid mask shape")
+        normals = edge_2d[:, :3]
+        starts = edge_2d[:, 3:6]
+        ends = edge_2d[:, 6:]
+
+        # Apply inverse rotation to the lines
+        rot_normals = torch.stack([(normals.unsqueeze(0) * (rot_mtx.permute(0, 2, 1))[:, i:i + 1, :]).sum(-1) 
+            for i in range(3)], dim=-1)  # (N_r, N_2D, 3)
+        rot_normals = rot_normals / rot_normals.norm(dim=-1, keepdim=True)
+        rot_starts = torch.stack([(starts.unsqueeze(0) * (rot_mtx.permute(0, 2, 1))[:, i:i + 1, :]).sum(-1) 
+            for i in range(3)], dim=-1)  # (N_r, N_2D, 3)
+        rot_starts = rot_starts / rot_starts.norm(dim=-1, keepdim=True)
+        rot_ends = torch.stack([(ends.unsqueeze(0) * (rot_mtx.permute(0, 2, 1))[:, i:i + 1, :]).sum(-1) 
+            for i in range(3)], dim=-1)  # (N_r, N_2D, 3)
+        rot_ends = rot_ends / rot_ends.norm(dim=-1, keepdim=True)
+
+        cos_theta = (rot_starts * rot_ends).sum(-1).unsqueeze(-2)  # (N_r, 1, N_2D)
+        cos_theta1 = (rot_starts @ query_points.t()).permute(0, 2, 1)  # (N_r, N_q, N_2D)
+        cos_theta2 = (rot_ends @ query_points.t()).permute(0, 2, 1)  # (N_r, N_q, N_2D)
+
+        # Angle between edge point and line normal
+        normal_acute = np.pi / 2 - torch.arccos(torch.abs(rot_normals @ query_points.t()).clip_(min=-1., max=1.))  # (N_r, N_2D, N_q)
+        normal_acute = normal_acute.permute(0, 2, 1)  # (N_r, N_q, N_2D)
+        theta1 = torch.arccos(cos_theta1.clip_(min=-1., max=1.))  # Angle between edge point and line start
+        theta2 = torch.arccos(cos_theta2.clip_(min=-1., max=1.))  # Angle between edge point and line end
+
+        # Determine if angles of spherical triangle are over 90 degrees
+        sign_arc_theta1 = (cos_theta1 - cos_theta * cos_theta2 > 0)  # Positive indicates arc_theta1 is smaller than 90
+        sign_arc_theta2 = (cos_theta2 - cos_theta * cos_theta1 > 0)
+
+        sphere_dist = (sign_arc_theta1 & sign_arc_theta2) * normal_acute + \
+            torch.bitwise_not(sign_arc_theta1 & sign_arc_theta2) * torch.minimum(theta1, theta2)  # (N_r, N_q, N_2D)
+
+        if mask is None:
+            dist_2d = sphere_dist.min(-1).values
+        elif len(mask.shape) == 2:
+            MAX_LIMIT = np.pi
+            new_mask = mask.reshape(1, 1, mask.shape[0], mask.shape[1])
+            dist_2d = sphere_dist.unsqueeze(-1) * new_mask  # (N_r, N_q, N_2D, K)
+            dist_2d += torch.bitwise_not(new_mask) * MAX_LIMIT  # Make all other entries not belonging to the class invalid
+            dist_2d = dist_2d.min(-2).values  # (N_r, N_q, K)
+        elif len(mask.shape) == 3:
+            MAX_LIMIT = np.pi
+            new_mask = mask.reshape(mask.shape[0], 1, mask.shape[1], mask.shape[2])
+            dist_2d = sphere_dist.unsqueeze(-1) * new_mask  # (N_r, N_q, N_3D, K)
+            dist_2d += torch.bitwise_not(new_mask) * MAX_LIMIT  # Make all other entries not belonging to the class invalid
+            dist_2d = dist_2d.min(-2).values  # (N_r, N_q, K)
+        else:
+            raise ValueError("Invalid mask shape")
+
     return dist_2d
 
 
@@ -1203,3 +1286,184 @@ def icosahedron2sphere(level):
         coor = list(coor / np.tile(np.sqrt(np.sum(coor * coor, 1, keepdims=True)), (1, 3)))
 
     return np.array(coor), np.array(tri)
+
+
+# Point distance functions
+def distance_func_point_2d(query_points, kpts_2d, mask=None):
+    """
+    Function that returns the closest distance to a set of line intersections in a 2D panorama image.
+    Note that query points should be normalized.
+
+    Args:
+        query_points: (N_q, 3) tensor containing points to query
+        kpts_2d: (N_2D, 3) tensor containing 2D keypoints in sphere format
+        mask: (N_2D, K) or (N_r, N_2D, K) tensor containing boolean values for points belonging to one of K classes
+    
+    Returns:
+        dist_2d: (N_q, ), (N_q, K), or (N_r, N_q, K) tensor containing distance to nearest edges
+    """
+    cos_theta = (query_points @ kpts_2d.t())  # (N_q, N_2D)
+    sphere_dist = torch.arccos(cos_theta.clip_(min=-1., max=1.))  # Angle between edge point and line start
+
+    if mask is None:
+        dist_2d = sphere_dist.min(-1).values
+    elif len(mask.shape) == 2:
+        MAX_LIMIT = np.pi
+        dist_2d = sphere_dist.unsqueeze(-1) * mask.unsqueeze(0)  # (N_q, N_2D, K)
+        dist_2d += torch.bitwise_not(mask.unsqueeze(0)) * MAX_LIMIT  # Make all other entries not belonging to the class invalid
+        dist_2d = dist_2d.min(1).values  # (N_q, K)
+    elif len(mask.shape) == 3:
+        MAX_LIMIT = np.pi
+        dist_2d = sphere_dist.unsqueeze(-1).unsqueeze(0) * mask.unsqueeze(1)  # (N_r, N_q, N_2D, K)
+        dist_2d += torch.bitwise_not(mask.unsqueeze(1)) * MAX_LIMIT  # Make all other entries not belonging to the class invalid
+        dist_2d = dist_2d.min(2).values  # (N_r, N_q, K)
+    else:
+        raise ValueError("Invalid mask shape")
+    return dist_2d
+
+
+def distance_func_point_2d_batch(query_points, kpts_2d, mask=None, rot_mtx=None):
+    """
+    Function that returns the closest distance to a set of line intersections in a 2D panorama image.
+    Note that query points should be normalized.
+
+    Args:
+        query_points: (N_q, 3) tensor containing points to query
+        kpts_2d: (N_r, N_2D, 3) tensor containing 2D keypoints in sphere format
+        mask: (N_r, N_2D, K) tensor containing boolean values for points belonging to one of K classes
+        rot_mtx: (N_r, 3, 3) tensor containing rotation candidate poses, where the rotation inverses will be applied to the points
+    
+    Returns:
+        dist_2d: (N_r, N_q, K) tensor containing distance to nearest edges
+    """
+    if rot_mtx is None:
+        cos_theta = (kpts_2d @ query_points.t()).permute(0, 2, 1)  # (N_r, N_q, N_2D)
+    else:
+        rot_kpts_2d = torch.stack([(kpts_2d * (rot_mtx.permute(0, 2, 1))[:, i:i + 1, :]).sum(-1)
+            for i in range(3)], dim=-1)  # (N_r, N_2D, 3)
+        cos_theta = (rot_kpts_2d @ query_points.t()).permute(0, 2, 1)  # (N_r, N_q, N_2D)
+    sphere_dist = torch.arccos(cos_theta.clip_(min=-1., max=1.))  # Angle between edge point and line start
+
+    if mask is None:
+        dist_2d = sphere_dist.min(-1).values
+    else:
+        MAX_LIMIT = np.pi
+        dist_2d = sphere_dist.unsqueeze(-1) * mask.unsqueeze(1)  # (N_r, N_q, N_2D, K)
+        dist_2d += torch.bitwise_not(mask.unsqueeze(1)) * MAX_LIMIT  # Make all other entries not belonging to the class invalid
+        dist_2d = dist_2d.min(2).values  # (N_r, N_q, K)
+    return dist_2d
+
+
+def distance_func_point_2d_single_compute(query_points, kpts_2d, mask, rot_mtx, perms):
+    """
+    Function that returns the closest distance to a set of line intersections in a 2D panorama image, where a single pose value is calculated and used for interpolation.
+    Note that query points should be normalized.
+
+    Args:
+        query_points: (N_q, 3) tensor containing points to query
+        kpts_2d: (N_2D, 3) tensor containing 2D keypoints in sphere format
+        mask: (N_2D, K) tensor containing boolean values for points belonging to one of K classes
+        rot_mtx: (N_r, 3, 3) tensor containing rotation candidate poses, where the rotation inverses will be applied to the points
+        perms: (N_r, 3) tensor containing permutations used for obtaining rotations
+
+    Returns:
+        dist_2d: (N_r, N_q, K) tensor containing distance to nearest edges
+    """
+    N_q = query_points.shape[0]
+    N_k = mask.shape[-1]
+    dist_2d = distance_func_point_2d(query_points, kpts_2d, mask)  # (N_q, N_K)
+    rot_query_points = query_points @ rot_mtx.permute(0, 2, 1)  # (N_r, N_q, N_k)
+    rot_nn_dist = (rot_query_points.unsqueeze(2) - query_points.reshape(1, 1, N_q, N_k)).norm(dim=-1)  # (N_r, N_q, N_q)
+    rot_nn_idx = rot_nn_dist.argmin(-1)  # (N_r, N_q)
+    dist_2d = dist_2d[:, perms].permute(1, 0, 2)  # (N_r, N_q, N_k)
+    dist_2d = torch.gather(dist_2d, 1, rot_nn_idx.unsqueeze(-1).repeat(1, 1, N_k))  # (N_r, N_q, N_k)
+    return dist_2d
+
+
+def distance_func_point_3d_batch(query_points, kpts_3d, trans_mtx, rot_mtx, mask=None):
+    """
+    Function that returns the closest distance to a set of line intersections in a 3D point cloud.
+    Note that query points should be normalized.
+
+    Args:
+        query_points: (N_q, 3) tensor containing points to query
+        kpts_3d: (N_3D, 3) tensor containing 3D keypoints
+        trans_mtx: (N_t, 3) tensor containing translation of point cloud
+        rot_mtx: (N_r, 3, 3) tensor containing rotation of point cloud
+        mask: (N_3D, K) tensor containing boolean values for lines belonging to one of K classes
+
+    Returns:
+        dist_3d: (N_t, N_r, N_q) or (N_t, N_r, N_q, K) tensor containing distance to nearest edges
+    """
+    orig_transform_kpts = (kpts_3d.unsqueeze(0) - trans_mtx.unsqueeze(1)).unsqueeze(1)  # (N_t, 1, N_3D, 3) 
+    orig_transform_kpts = torch.stack([(orig_transform_kpts * rot_mtx[:, i:i + 1, :].unsqueeze(0)).sum(-1) 
+        for i in range(3)], dim=-1)  # (N_t, N_r, N_3D, 3)
+
+    transform_kpts = orig_transform_kpts / orig_transform_kpts.norm(dim=-1, keepdim=True)
+    cos_theta = (transform_kpts @ query_points.t()).permute(0, 1, 3, 2)  # (N_t, N_r, N_q, N_3D)
+    sphere_dist = torch.arccos(cos_theta.clip_(min=-1., max=1.))  # Angle between edge point and line start
+
+    if mask is None:
+        dist_3d = sphere_dist.min(-1).values  # (N_t, N_r, N_q)
+    else:
+        MAX_LIMIT = np.pi
+        new_mask = mask.reshape(1, 1, 1, mask.shape[0], mask.shape[1])
+        dist_3d = sphere_dist.unsqueeze(-1) * new_mask  # (N_t, N_r, N_q, N_3D, K)
+        dist_3d += torch.bitwise_not(new_mask) * MAX_LIMIT  # Make all other entries not belonging to the class invalid
+        dist_3d = dist_3d.min(-2).values  # (N_t, N_r, N_q, K)
+
+    return dist_3d
+
+
+def extract_principal_2d(edge_lines, vote_sphere_pts=None):
+    tot_directions = []
+    counts_2d = []
+    vote_edge_lines = edge_lines.clone().detach()
+    max_search_iter = 20
+    device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
+
+    # Sphere for voting principal directions
+    if vote_sphere_pts is None:
+        vote_sphere_pts = generate_sphere_pts(5, device=device)
+        vote_sphere_pts = vote_sphere_pts[:vote_sphere_pts.shape[0] // 2]
+
+    for idx in range(max_search_iter):
+        if len(vote_edge_lines) == 0:
+            break
+        vote_2d = torch.where(torch.abs(vote_edge_lines[:, :3] @ vote_sphere_pts.t()) < 0.05)[1].bincount(minlength=vote_sphere_pts.shape[0])
+        max_idx = vote_2d.argmax()
+        counts_2d.append(vote_2d.max().item())
+        cand_direction = vote_sphere_pts[max_idx]
+        tot_directions.append(cand_direction)
+        outlier_idx = (torch.abs(vote_edge_lines[:, :3] @ vote_sphere_pts[max_idx: max_idx + 1].t()) > 0.05).squeeze()
+        vote_edge_lines = vote_edge_lines[outlier_idx]
+
+    tot_directions = torch.stack(tot_directions, dim=0)
+
+    # Search through all combinations to find a match with principal_3d
+    combs = torch.combinations(torch.arange(tot_directions.shape[0]), r=3)
+
+    comb_directions = tot_directions[combs]
+    comb_dots = torch.stack([(comb_directions[:, i % 3] * comb_directions[:, (i + 1) % 3]).sum(-1).abs()
+        for i in range(3)], dim=-1)
+    valid_comb_idx = (comb_dots < 0.1).sum(-1) == 3  # Assume perpendicular 3D, but can be extended
+
+    if valid_comb_idx.sum() == 0:  # Failed to find from total directions, get 2 directions and obtain rest from cross
+        if (comb_dots < 0.15).sum() != 0:  # At least one pair is perpendicular
+            new_valid_comb_idx = torch.where(comb_dots < 0.15)  # Assume perpendicular 3D, but can be extended
+            vec_0 = comb_directions[new_valid_comb_idx[0][0], new_valid_comb_idx[1][0]]
+            vec_1 = comb_directions[new_valid_comb_idx[0][0], (new_valid_comb_idx[1][0] + 1) % 3]
+            two_vec = torch.stack([vec_0, vec_1], dim=0)
+            third_vec = torch.cross(two_vec[0], two_vec[1]).unsqueeze(0)
+            principal_2d = torch.cat([two_vec, third_vec])
+        else:  # Worst case: pick two most frequent directions
+            two_vec = tot_directions[:2]
+            third_vec = torch.cross(two_vec[0], two_vec[1]).unsqueeze(0)
+            principal_2d = torch.cat([two_vec, third_vec])
+    else:
+        extracted_comb = torch.where(valid_comb_idx)[0][0]
+        principal_2d = comb_directions[extracted_comb]
+
+    if torch.det(principal_2d) < 0:
+        principal_2d[-1, :] *= -1
+    return principal_2d

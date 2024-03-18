@@ -232,6 +232,18 @@ def get_pcd_name(dataset, **kwargs):
     return pcd_name
 
 
+def get_room_list(dataset, **kwargs):  # Return a list of rooms to use during localization
+    if dataset == 'omniscenes':
+        room_list = [s.replace(".txt", "") for s in os.listdir("./data/omniscenes/pcd/")]
+    elif dataset == 'stanford':
+        room_list = []
+        for area in os.listdir("./data/stanford/pcd/"):
+            room_list.extend([os.path.join(area, s.replace(".txt", "")) for s in os.listdir(f"./data/stanford/pcd/{area}/")])
+
+    room_list = sorted(room_list)
+    return room_list
+
+
 def read_pcd(dataset, **kwargs):
     if dataset == 'omniscenes':
         return read_txt_pcd(kwargs['pcd_name'].replace('pcd_line', 'pcd').replace('lines', ''), sample_rate=kwargs['sample_rate'])

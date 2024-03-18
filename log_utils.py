@@ -58,7 +58,7 @@ class PoseLogger:
     def add_skipped_room(self, filename):
         self.skipped_rooms.append(filename)
     
-    def calc_statistics(self, target=None):
+    def calc_statistics(self, target=None, filter_kwd_list=None):
         # target specifices which statistics will be computed
         all_names = self.pose_dict.keys()
         room_split_names = self.room_split_error_dict.keys()
@@ -81,13 +81,18 @@ class PoseLogger:
                     self.stat_dict[room]['accuracy'] = 'N/A'
         elif target == 'split':
             for split in split_names:
-                self.stat_dict[split]['median_t_error'] = \
-                    sorted(self.split_error_dict[split]['t_error_list'])[len(self.split_error_dict[split]['t_error_list']) // 2]
-                self.stat_dict[split]['median_r_error'] = \
-                    sorted(self.split_error_dict[split]['r_error_list'])[len(self.split_error_dict[split]['r_error_list']) // 2]
-                self.stat_dict[split]['accuracy'] = sum([(t_error < self.t_thres and r_error < self.r_thres) for (t_error, r_error)
-                    in zip(self.split_error_dict[split]['t_error_list'], self.split_error_dict[split]['r_error_list'])])
-                self.stat_dict[split]['accuracy'] /= len(self.split_error_dict[split]['t_error_list'])
+                if len(self.split_error_dict[split]['t_error_list']) != 0:
+                    self.stat_dict[split]['median_t_error'] = \
+                        sorted(self.split_error_dict[split]['t_error_list'])[len(self.split_error_dict[split]['t_error_list']) // 2]
+                    self.stat_dict[split]['median_r_error'] = \
+                        sorted(self.split_error_dict[split]['r_error_list'])[len(self.split_error_dict[split]['r_error_list']) // 2]
+                    self.stat_dict[split]['accuracy'] = sum([(t_error < self.t_thres and r_error < self.r_thres) for (t_error, r_error)
+                        in zip(self.split_error_dict[split]['t_error_list'], self.split_error_dict[split]['r_error_list'])])
+                    self.stat_dict[split]['accuracy'] /= len(self.split_error_dict[split]['t_error_list'])
+                else:
+                    self.stat_dict[split]['median_t_error'] = 'N/A'
+                    self.stat_dict[split]['median_r_error'] = 'N/A'
+                    self.stat_dict[split]['accuracy'] = 'N/A'
         elif target == 'room_split':
             for room_split in room_split_names:
                 if len(self.room_split_error_dict[room_split]['t_error_list']) != 0:
@@ -102,6 +107,36 @@ class PoseLogger:
                     self.stat_dict[room_split]['median_t_error'] = 'N/A'
                     self.stat_dict[room_split]['median_r_error'] = 'N/A'
                     self.stat_dict[room_split]['accuracy'] = 'N/A'
+        elif target == 'kwd':
+            assert filter_kwd_list is not None
+            self.kwd_dict = {'name': filter_kwd_list, 'median_t_error': None, 'median_r_error': None, 'accuracy': None, 't_error_list': [], 'r_error_list': []}
+            for room_split in room_split_names:
+                valid_room_split = len(self.room_split_error_dict[room_split]['t_error_list']) != 0
+                fit_kwd = True
+                for filter_kwd in filter_kwd_list:
+                    if 'not' in filter_kwd:  # Exclusion query (e.g. not_area_1)
+                        if not (filter_kwd.strip('not_') not in room_split[0] and filter_kwd.strip('not_') not in room_split[1]):
+                            fit_kwd = False
+                    else:  # Inclusion query (e.g. area_1)
+                        if not (filter_kwd in room_split[0] or filter_kwd in room_split[1]):
+                            fit_kwd = False
+
+                if fit_kwd and valid_room_split:
+                    self.kwd_dict['t_error_list'].extend(self.room_split_error_dict[room_split]['t_error_list'])
+                    self.kwd_dict['r_error_list'].extend(self.room_split_error_dict[room_split]['r_error_list'])
+
+            if len(self.kwd_dict['t_error_list']) != 0:
+                self.kwd_dict['median_t_error'] = \
+                    sorted(self.kwd_dict['t_error_list'])[len(self.kwd_dict['t_error_list']) // 2]
+                self.kwd_dict['median_r_error'] = \
+                    sorted(self.kwd_dict['r_error_list'])[len(self.kwd_dict['r_error_list']) // 2]
+                self.kwd_dict['accuracy'] = sum([(t_error < self.t_thres and r_error < self.r_thres) for (t_error, r_error)
+                    in zip(self.kwd_dict['t_error_list'], self.kwd_dict['r_error_list'])])
+                self.kwd_dict['accuracy'] /= len(self.kwd_dict['t_error_list'])
+            else:
+                self.kwd_dict['median_t_error'] = 'N/A'
+                self.kwd_dict['median_r_error'] = 'N/A'
+                self.kwd_dict['accuracy'] = 'N/A'
         elif target == 'total':
             self.stat_dict['total']['median_t_error'] = \
                 sorted(self.total_error_dict['t_error_list'])[len(self.total_error_dict['t_error_list']) // 2]
@@ -131,6 +166,9 @@ class PoseLogger:
             for room_split in room_split_names:
                 print(f"Statistics for {room_split}:")
                 print(self.stat_dict[room_split])
+        elif target == 'kwd':
+            print(f"Statistics for {self.kwd_dict['name']}")
+            print(f"t-error: {self.kwd_dict['median_t_error']}, r-error: {self.kwd_dict['median_r_error']}, acc: {self.kwd_dict['accuracy']}")
 
 
 def save_logger(pickle_name, logger: PoseLogger):

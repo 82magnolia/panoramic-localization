@@ -585,6 +585,25 @@ def rot_from_ypr(ypr_array):
         return torch.stack(tot_mtx)
 
 
+def ypr_from_rot(rot_mtx):
+    def _mtx2ypr(in_mtx):
+        # in_mtx is assumed to have a shape of [3, 3]
+        yaw = torch.atan2(in_mtx[1, 0], in_mtx[0, 0] + 1e-6)
+        pitch = torch.arcsin(-in_mtx[2, 0])
+        roll = torch.atan2(in_mtx[2, 1], in_mtx[2, 2])
+
+        ypr = torch.tensor([yaw, pitch, roll], device=in_mtx.device)
+        return ypr
+    
+    if len(rot_mtx.shape) == 2:
+        return _mtx2ypr(rot_mtx)
+    else:
+        tot_mtx = []
+        for mtx in rot_mtx:
+            tot_mtx.append(_mtx2ypr(mtx))
+        return torch.stack(tot_mtx)
+
+
 def reshape_img_tensor(img: torch.Tensor, size: Tuple):
     # Note that size is (X, Y)
     cv_img = (img.cpu().numpy() * 255).astype(np.uint8)
