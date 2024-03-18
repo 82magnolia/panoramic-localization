@@ -179,9 +179,22 @@ Finally, run the following command, and the renderings at the localized pose wil
 python main.py --config config/omniscenes_ldl.ini --log LOG_DIRECTORY --method ldl --single --query_img PATH_TO_QUERY_IMG --color_pcd PATH_TO_COLORED_POINT_CLOUD --line_pcd PATH_TO_LINE_CLOUD
 ```
 
-## Running FPGL
+## Running FGPL
 ### Stanford 2D-3D-S or OmniScenes
-To be updated.
+Run the following command for Stanford 2D-3D-S.
+```
+python main.py --config config/stanford_fgpl.ini --log log/fgpl_test --method fgpl
+```
+
+Similarly, run the following command for OmniScenes
+```
+python main.py --config config/omniscenes_fgpl.ini --log log/fgpl_test --method fgpl
+```
+
+While the default setup is large-scale localization with multiple line maps, one can also test sinlge room localization with the follwoing command:
+```
+python main.py --config config/omniscenes_fgpl.ini --log log/fgpl_test --method fgpl --override "loc_exp_mode=single_room"
+```
 
 ### Preparing and Testing on Your Own Data
 To be updated.
