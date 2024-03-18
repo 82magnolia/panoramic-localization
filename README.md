@@ -27,7 +27,7 @@ To this end, LDL compares the distribution of lines using line distance function
 For more details, please refer to the [original paper](https://openaccess.thecvf.com/content/ICCV2023/papers/Kim_LDL_Line_Distance_Functions_for_Panoramic_Localization_ICCV_2023_paper.pdf) and [video](https://www.youtube.com/watch?v=cQ5l4rauNY0).
 
 ### FGPL (CVPR 2024)
-[<img src="fgpl_overview.png" width="700"/>](fgpl_overview.png)\
+[<img src="fgpl_overview.png" width="500"/>](fgpl_overview.png)\
 FGPL is a line-based localization algorithm that finds the camera pose solely using the geometry of lines and their intersections.
 The algorithm first performs coarse pose search using the spatial distribution of lines and their intersections, and then refines the poses by aligning the lines on the sphere.
 For more details, please refer to the [original paper (to be updated)](https://www.junhokim.xyz/) and [video (to be updated)](https://www.junhokim.xyz/).
@@ -170,10 +170,6 @@ Similarly, run the following command for OmniScenes
 python main.py --config config/omniscenes_ldl.ini --log log/ldl_test --method ldl
 ```
 
-## Running FPGL
-### Stanford 2D-3D-S or OmniScenes
-To be updated.
-
 ### Preparing and Testing on Your Own Data
 We also provide scripts for directly testing on your own data. 
 First, prepare a query panorama image and 3D colored point cloud.
@@ -182,6 +178,13 @@ Finally, run the following command, and the renderings at the localized pose wil
 ```
 python main.py --config config/omniscenes_ldl.ini --log LOG_DIRECTORY --method ldl --single --query_img PATH_TO_QUERY_IMG --color_pcd PATH_TO_COLORED_POINT_CLOUD --line_pcd PATH_TO_LINE_CLOUD
 ```
+
+## Running FPGL
+### Stanford 2D-3D-S or OmniScenes
+To be updated.
+
+### Preparing and Testing on Your Own Data
+To be updated.
 
 ## Checking log files
 Results from localization will be saved in `.pkl` files. To open a single `.pkl` file and print the recall at `0.1m, 5deg`, run the following command.
