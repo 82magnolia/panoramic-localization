@@ -1,10 +1,11 @@
 # Panoramic Localization
-Panoramic localization library containing PyTorch implementations of various panoramic localization algorithms: [PICCOLO](https://openaccess.thecvf.com/content/ICCV2021/html/Kim_PICCOLO_Point_Cloud-Centric_Omnidirectional_Localization_ICCV_2021_paper.html) (ICCV 2021), [CPO](https://www.ecva.net/papers/eccv_2022/papers_ECCV/html/1567_ECCV_2022_paper.php) (ECCV 2022), and [LDL](https://openaccess.thecvf.com/content/ICCV2023/html/Kim_LDL_Line_Distance_Functions_for_Panoramic_Localization_ICCV_2023_paper.html) (ICCV 2023).
+Panoramic localization library containing PyTorch implementations of various panoramic localization algorithms: [PICCOLO](https://openaccess.thecvf.com/content/ICCV2021/html/Kim_PICCOLO_Point_Cloud-Centric_Omnidirectional_Localization_ICCV_2021_paper.html) (ICCV 2021), [CPO](https://www.ecva.net/papers/eccv_2022/papers_ECCV/html/1567_ECCV_2022_paper.php) (ECCV 2022), [LDL](https://openaccess.thecvf.com/content/ICCV2023/html/Kim_LDL_Line_Distance_Functions_for_Panoramic_Localization_ICCV_2023_paper.html) (ICCV 2023), and [FGPL](https://www.junhokim.xyz/) (CVPR 2024).
 Please refer to the links below to run each of the localization algorithms.
 
 * PICCOLO: [Link](https://github.com/82magnolia/panoramic-localization#running-piccolo) 
 * CPO: [Link](https://github.com/82magnolia/panoramic-localization#running-cpo)
 * LDL: [Link](https://github.com/82magnolia/panoramic-localization#running-ldl)
+* FGPL: [Link](https://github.com/82magnolia/panoramic-localization#running-fgpl)
 
 ## Description of Each Localization Algorithm
 ### PICCOLO (ICCV 2021)
@@ -24,6 +25,12 @@ For more details, please refer to the [original paper](https://www.ecva.net/pape
 LDL is a line-based panoramic localization algorithm that localized a query image with respect to a 3D line map.
 To this end, LDL compares the distribution of lines using line distance functions, which makes pose search even faster than CPO.
 For more details, please refer to the [original paper](https://openaccess.thecvf.com/content/ICCV2023/papers/Kim_LDL_Line_Distance_Functions_for_Panoramic_Localization_ICCV_2023_paper.pdf) and [video](https://www.youtube.com/watch?v=cQ5l4rauNY0).
+
+### FGPL (CVPR 2024)
+[<img src="fgpl_overview.png" width="700"/>](fgpl_overview.png)\
+FGPL is a line-based localization algorithm that finds the camera pose solely using the geometry of lines and their intersections.
+The algorithm first performs coarse pose search using the spatial distribution of lines and their intersections, and then refines the poses by aligning the lines on the sphere.
+For more details, please refer to the [original paper (to be updated)](https://www.junhokim.xyz/) and [video (to be updated)](https://www.junhokim.xyz/).
 
 ## Dataset preparation (Stanford 2D-3D-S & OmniScenes)
 First ownload the panorama images (`pano`) and poses (`pose`) from the following [link](https://docs.google.com/forms/d/e/1FAIpQLScFR0U8WEUtb7tgjOhhnl31OrkEs73-Y8bQwPeXgebqVKNMpQ/viewform?c=0&w=1) (download the one without `XYZ`) and the point cloud (`pcd_not_aligned`) from the following [link](https://docs.google.com/forms/d/e/1FAIpQLScDimvNMCGhy_rmBA2gHfDu3naktRm6A8BPwAWWDv-Uhm6Shw/viewform?c=0&w=1).
@@ -162,6 +169,10 @@ Similarly, run the following command for OmniScenes
 ```
 python main.py --config config/omniscenes_ldl.ini --log log/ldl_test --method ldl
 ```
+
+## Running FPGL
+### Stanford 2D-3D-S or OmniScenes
+To be updated.
 
 ### Preparing and Testing on Your Own Data
 We also provide scripts for directly testing on your own data. 
