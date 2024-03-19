@@ -197,7 +197,13 @@ python main.py --config config/omniscenes_fgpl.ini --log log/fgpl_test --method 
 ```
 
 ### Preparing and Testing on Your Own Data
-To be updated.
+We also provide scripts for directly testing on your own data. 
+First, prepare a query panorama image and 3D colored point cloud.
+Then, extract 3D line segments using the [following repository](https://github.com/xiaohulugo/3DLineDetection).
+Finally, run the following command, and the renderings at the localized pose will be saved in the log directory.
+```
+python main.py --config config/omniscenes_fgpl.ini --log LOG_DIRECTORY --method fgpl --single --query_img PATH_TO_QUERY_IMG --line_pcd PATH_TO_LINE_CLOUD
+```
 
 ## Checking log files
 Results from localization will be saved in `.pkl` files. To open a single `.pkl` file and print the recall at `0.1m, 5deg`, run the following command.
