@@ -79,6 +79,8 @@ if __name__ == '__main__':
         if args.single:
             if args.method in ['ldl']:  # Line-based methods
                 importlib.import_module(f"{args.method}.localize_single").localize(cfg, log_dir, args.query_img, args.color_pcd, args.line_pcd, args.crop_up_down)
+            elif args.method in ['fgpl']:  # Fully geometric methods
+                importlib.import_module(f"{args.method}.localize_single").localize(cfg, log_dir, args.query_img, args.line_pcd, args.crop_up_down)
             else:  # Color-based methods
                 importlib.import_module(f"{args.method}.localize_single").localize(cfg, log_dir, args.query_img, args.color_pcd)
         else:

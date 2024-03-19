@@ -255,7 +255,7 @@ def make_pano_line_3d(starts, ends, mask=None, resolution=(400, 800), trans_mtx=
         else:
             line_rgb = rgb[mask].repeat_interleave(line_steps, dim=0)
     else:
-        line_rgb = torch.ones_like(tot_pts).float()
+        line_rgb = torch.zeros_like(tot_pts).float()
 
     if rot_mtx is None:
         edge_img = make_pano((tot_pts.float() - trans_mtx) @ rot_mtx.t(), line_rgb, resolution=resolution, default_white=True)
