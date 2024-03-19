@@ -2,10 +2,10 @@
 Panoramic localization library containing PyTorch implementations of various panoramic localization algorithms: [PICCOLO](https://openaccess.thecvf.com/content/ICCV2021/html/Kim_PICCOLO_Point_Cloud-Centric_Omnidirectional_Localization_ICCV_2021_paper.html) (ICCV 2021), [CPO](https://www.ecva.net/papers/eccv_2022/papers_ECCV/html/1567_ECCV_2022_paper.php) (ECCV 2022), [LDL](https://openaccess.thecvf.com/content/ICCV2023/html/Kim_LDL_Line_Distance_Functions_for_Panoramic_Localization_ICCV_2023_paper.html) (ICCV 2023), and [FGPL](https://www.junhokim.xyz/) (CVPR 2024).
 Please refer to the links below to run each of the localization algorithms.
 
-* PICCOLO: [Link](https://github.com/82magnolia/panoramic-localization#running-piccolo) 
-* CPO: [Link](https://github.com/82magnolia/panoramic-localization#running-cpo)
-* LDL: [Link](https://github.com/82magnolia/panoramic-localization#running-ldl)
-* FGPL: [Link](https://github.com/82magnolia/panoramic-localization#running-fgpl)
+* PICCOLO: [Link](#running-piccolo) 
+* CPO: [Link](#running-cpo)
+* LDL: [Link](#running-ldl)
+* FGPL: [Link](#running-fgpl)
 
 ## Description of Each Localization Algorithm
 ### PICCOLO (ICCV 2021)
