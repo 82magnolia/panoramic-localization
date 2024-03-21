@@ -252,3 +252,13 @@ If you find the repository useful, please cite the following papers:
     pages     = {17882-17892}
 }
 ```
+
+```bibtex
+@InProceedings{Kim_2024_CVPR,
+  author    = {Kim, Junho and Jeong, Jiwon and Kim, Young Min},
+  title     = {Fully Geometric Panoramic Localization},
+  booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
+  month     = {June},
+  year      = {2024},  
+}          
+```
